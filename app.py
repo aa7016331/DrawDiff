@@ -1,35 +1,22 @@
 import os
 import csv
 import io
-from pathlib import Path
+import base64
 
 from flask import Flask, render_template, request, jsonify, Response
 import cv2
 import numpy as np
 import fitz
 
-BASE = Path(__file__).resolve().parent
-SYMBOL_DIR = BASE / "static" / "symbols"
 
 ALLOWED = {
     "png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"
 }
 
 LEGENDS = [
-    "住戶開關箱與弱電箱整合",
-    "馬桶專用插座 H:30cm",
-    "抽油煙機插座 H:天花板內",
-    "雙聯插座 H:30cm／電視牆 H:80cm",
-    "雙聯插座 H:110cm",
-    "洗碗機專用插座 H:45cm",
-    "微波烤箱專用插座 220V",
-    "洗衣機用插座（防雨型）H:120cm",
-    "廚房橫櫃燈用電源出線口 H:170cm",
-    "暖風乾燥機電源出口 220V",
-    "雙聯紅色緊急插座（弱電箱用）",
-    "雙聯紅色緊急插座（冰箱／電視牆）",
-    "冷氣電源出口 220V",
+    "圖面差異",
 ]
+
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
@@ -47,7 +34,11 @@ def read_upload(file):
     raw = file.read()
 
     if ext == "pdf":
-        doc = fitz.open(stream=raw, filetype="pdf")
+
+        doc = fitz.open(
+            stream=raw,
+            filetype="pdf"
+        )
 
         page = doc.load_page(0)
 
@@ -78,157 +69,259 @@ def read_upload(file):
     )
 
 
-def preprocess(image):
-    gray = cv2.cvtColor(
-        image,
+def encode_image(image):
+
+    success, buffer = cv2.imencode(
+        ".png",
+        image
+    )
+
+    if not success:
+        return None
+
+    encoded = base64.b64encode(
+        buffer.tobytes()
+    ).decode("utf-8")
+
+    return "data:image/png;base64," + encoded
+
+
+def align_images(old_image, new_image):
+
+    old_gray = cv2.cvtColor(
+        old_image,
         cv2.COLOR_BGR2GRAY
     )
 
-    gray = cv2.GaussianBlur(
-        gray,
+    new_gray = cv2.cvtColor(
+        new_image,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    old_h, old_w = old_gray.shape
+
+    new_image = cv2.resize(
+        new_image,
+        (old_w, old_h),
+        interpolation=cv2.INTER_AREA
+    )
+
+    new_gray = cv2.cvtColor(
+        new_image,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    try:
+
+        warp_matrix = np.eye(
+            2,
+            3,
+            dtype=np.float32
+        )
+
+        criteria = (
+            cv2.TERM_CRITERIA_EPS
+            | cv2.TERM_CRITERIA_COUNT,
+            100,
+            1e-6
+        )
+
+        _, warp_matrix = cv2.findTransformECC(
+            old_gray.astype(np.float32) / 255.0,
+            new_gray.astype(np.float32) / 255.0,
+            warp_matrix,
+            cv2.MOTION_EUCLIDEAN,
+            criteria
+        )
+
+        aligned_new = cv2.warpAffine(
+            new_image,
+            warp_matrix,
+            (old_w, old_h),
+            flags=(
+                cv2.INTER_LINEAR
+                + cv2.WARP_INVERSE_MAP
+            ),
+            borderMode=cv2.BORDER_REPLICATE
+        )
+
+        return old_image, aligned_new
+
+    except cv2.error:
+
+        return old_image, new_image
+
+
+def find_differences(old_image, new_image):
+
+    old_image, new_image = align_images(
+        old_image,
+        new_image
+    )
+
+    old_gray = cv2.cvtColor(
+        old_image,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    new_gray = cv2.cvtColor(
+        new_image,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    old_gray = cv2.GaussianBlur(
+        old_gray,
         (3, 3),
         0
     )
 
-    return gray
-
-
-def nms(boxes, min_dist):
-    boxes = sorted(
-        boxes,
-        key=lambda x: x[4],
-        reverse=True
+    new_gray = cv2.GaussianBlur(
+        new_gray,
+        (3, 3),
+        0
     )
 
-    keep = []
-
-    for box in boxes:
-
-        cx = box[0] + box[2] / 2
-        cy = box[1] + box[3] / 2
-
-        far_enough = all(
-            (
-                (
-                    cx - (k[0] + k[2] / 2)
-                ) ** 2
-                +
-                (
-                    cy - (k[1] + k[3] / 2)
-                ) ** 2
-            ) ** 0.5 >= min_dist
-
-            for k in keep
-        )
-
-        if far_enough:
-            keep.append(box)
-
-    return keep
-
-
-def count_template(plan_gray, template_path):
-
-    template = cv2.imread(
-        str(template_path),
-        cv2.IMREAD_GRAYSCALE
+    diff = cv2.absdiff(
+        old_gray,
+        new_gray
     )
 
-    if template is None:
-        return 0
-
-    hits = []
-
-    h0, w0 = template.shape[:2]
-
-    scales = (
-        0.55,
-        0.65,
-        0.75,
-        0.85,
-        1.0,
-        1.15,
-        1.3,
-        1.5,
-        1.75
+    _, thresh = cv2.threshold(
+        diff,
+        35,
+        255,
+        cv2.THRESH_BINARY
     )
 
-    for scale in scales:
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (5, 5)
+    )
 
-        w = max(8, int(w0 * scale))
-        h = max(8, int(h0 * scale))
+    thresh = cv2.morphologyEx(
+        thresh,
+        cv2.MORPH_CLOSE,
+        kernel,
+        iterations=2
+    )
 
-        if (
-            w >= plan_gray.shape[1]
-            or h >= plan_gray.shape[0]
-        ):
+    thresh = cv2.dilate(
+        thresh,
+        kernel,
+        iterations=2
+    )
+
+    contours, _ = cv2.findContours(
+        thresh,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    boxes = []
+
+    image_area = (
+        old_image.shape[0]
+        * old_image.shape[1]
+    )
+
+    min_area = max(
+        80,
+        image_area * 0.00001
+    )
+
+    for contour in contours:
+
+        area = cv2.contourArea(contour)
+
+        if area < min_area:
             continue
 
-        interpolation = (
-            cv2.INTER_AREA
-            if scale < 1
-            else cv2.INTER_CUBIC
+        x, y, w, h = cv2.boundingRect(
+            contour
         )
 
-        resized = cv2.resize(
-            template,
-            (w, h),
-            interpolation=interpolation
+        if w < 8 or h < 8:
+            continue
+
+        boxes.append(
+            (x, y, w, h)
         )
 
-        result = cv2.matchTemplate(
-            plan_gray,
-            resized,
-            cv2.TM_CCOEFF_NORMED
+    boxes = sorted(
+        boxes,
+        key=lambda box: (
+            box[1],
+            box[0]
         )
-
-        ys, xs = np.where(result >= 0.82)
-
-        for y, x in zip(ys, xs):
-
-            hits.append(
-                (
-                    int(x),
-                    int(y),
-                    w,
-                    h,
-                    float(result[y, x])
-                )
-            )
-
-    if not hits:
-        return 0
-
-    distance = max(
-        12,
-        min(w0, h0) * 0.55
     )
 
-    return len(
-        nms(hits, distance)
+    old_marked = old_image.copy()
+    new_marked = new_image.copy()
+
+    for index, (x, y, w, h) in enumerate(
+        boxes,
+        start=1
+    ):
+
+        padding = 10
+
+        x1 = max(0, x - padding)
+        y1 = max(0, y - padding)
+
+        x2 = min(
+            old_image.shape[1] - 1,
+            x + w + padding
+        )
+
+        y2 = min(
+            old_image.shape[0] - 1,
+            y + h + padding
+        )
+
+        cv2.rectangle(
+            old_marked,
+            (x1, y1),
+            (x2, y2),
+            (0, 0, 255),
+            3
+        )
+
+        cv2.rectangle(
+            new_marked,
+            (x1, y1),
+            (x2, y2),
+            (0, 0, 255),
+            3
+        )
+
+        cv2.putText(
+            old_marked,
+            str(index),
+            (x1, max(30, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (0, 0, 255),
+            3,
+            cv2.LINE_AA
+        )
+
+        cv2.putText(
+            new_marked,
+            str(index),
+            (x1, max(30, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (0, 0, 255),
+            3,
+            cv2.LINE_AA
+        )
+
+    return (
+        old_marked,
+        new_marked,
+        thresh,
+        boxes
     )
-
-
-def analyze(image):
-
-    gray = preprocess(image)
-
-    counts = []
-
-    for i in range(len(LEGENDS)):
-
-        symbol_path = (
-            SYMBOL_DIR / f"{i}.png"
-        )
-
-        counts.append(
-            count_template(
-                gray,
-                symbol_path
-            )
-        )
-
-    return counts
 
 
 @app.get("/")
@@ -270,26 +363,33 @@ def analyze_api():
             error="有圖片無法讀取"
         ), 400
 
-    old_counts = analyze(old_image)
-    new_counts = analyze(new_image)
+    (
+        old_marked,
+        new_marked,
+        diff_mask,
+        boxes
+    ) = find_differences(
+        old_image,
+        new_image
+    )
 
-    rows = []
+    rows = [
+        {
+            "id": 0,
+            "name": "偵測到的圖面差異區域",
+            "old": 0,
+            "new": len(boxes),
+            "diff": len(boxes),
+        }
+    ]
 
-    for i, name in enumerate(LEGENDS):
-
-        rows.append(
-            {
-                "id": i,
-                "name": name,
-                "old": int(old_counts[i]),
-                "new": int(new_counts[i]),
-                "diff": int(
-                    new_counts[i] - old_counts[i]
-                ),
-            }
-        )
-
-    return jsonify(rows=rows)
+    return jsonify(
+        rows=rows,
+        difference_count=len(boxes),
+        old_image=encode_image(old_marked),
+        new_image=encode_image(new_marked),
+        diff_image=encode_image(diff_mask)
+    )
 
 
 @app.post("/export")
