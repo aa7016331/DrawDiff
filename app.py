@@ -4,21 +4,20 @@ import io
 import base64
 
 from flask import Flask, render_template, request, jsonify, Response
+
 import cv2
 import numpy as np
 import fitz
 
 
 ALLOWED = {
-    "png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"
+    "png", "jpg", "jpeg",
+    "bmp", "tif", "tiff",
+    "pdf"
 }
 
-LEGENDS = [
-    "圖面差異",
-]
-
-
 app = Flask(__name__)
+
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 
 
@@ -30,6 +29,11 @@ def allowed(filename):
 
 
 def read_upload(file):
+    """
+    讀取圖片或 PDF。
+    PDF 目前先讀取第一頁。
+    """
+
     ext = file.filename.rsplit(".", 1)[1].lower()
     raw = file.read()
 
@@ -47,21 +51,24 @@ def read_upload(file):
             alpha=False
         )
 
+        image_bytes = pix.tobytes("png")
+
+        doc.close()
+
         arr = np.frombuffer(
-            pix.tobytes("png"),
+            image_bytes,
             np.uint8
         )
 
-        image = cv2.imdecode(
+        return cv2.imdecode(
             arr,
             cv2.IMREAD_COLOR
         )
 
-        doc.close()
-
-        return image
-
-    arr = np.frombuffer(raw, np.uint8)
+    arr = np.frombuffer(
+        raw,
+        np.uint8
+    )
 
     return cv2.imdecode(
         arr,
@@ -69,121 +76,182 @@ def read_upload(file):
     )
 
 
-def encode_image(image):
+def image_to_base64(image):
+    """
+    OpenCV 圖片轉成可在網頁顯示的 Base64。
+    """
 
     success, buffer = cv2.imencode(
-        ".png",
-        image
+        ".jpg",
+        image,
+        [
+            cv2.IMWRITE_JPEG_QUALITY,
+            92
+        ]
     )
 
     if not success:
         return None
 
     encoded = base64.b64encode(
-        buffer.tobytes()
+        buffer
     ).decode("utf-8")
 
-    return "data:image/png;base64," + encoded
-
-
-def align_images(old_image, new_image):
-
-    old_gray = cv2.cvtColor(
-        old_image,
-        cv2.COLOR_BGR2GRAY
+    return (
+        "data:image/jpeg;base64,"
+        + encoded
     )
 
-    new_gray = cv2.cvtColor(
-        new_image,
-        cv2.COLOR_BGR2GRAY
-    )
 
-    old_h, old_w = old_gray.shape
+def resize_for_compare(old_image, new_image):
+    """
+    將新圖調整到與原圖相同尺寸。
 
-    new_image = cv2.resize(
+    以原圖尺寸為基準。
+    """
+
+    old_h, old_w = old_image.shape[:2]
+
+    new_resized = cv2.resize(
         new_image,
         (old_w, old_h),
         interpolation=cv2.INTER_AREA
     )
 
-    new_gray = cv2.cvtColor(
+    return old_image, new_resized
+
+
+def align_images(old_image, new_image):
+    """
+    嘗試用 ORB 特徵點做簡單對齊。
+
+    如果對齊失敗，
+    就直接使用 resize 後的圖片。
+    """
+
+    gray_old = cv2.cvtColor(
+        old_image,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    gray_new = cv2.cvtColor(
         new_image,
         cv2.COLOR_BGR2GRAY
     )
 
-    try:
+    orb = cv2.ORB_create(
+        1500
+    )
 
-        warp_matrix = np.eye(
-            2,
-            3,
-            dtype=np.float32
-        )
+    kp1, des1 = orb.detectAndCompute(
+        gray_old,
+        None
+    )
 
-        criteria = (
-            cv2.TERM_CRITERIA_EPS
-            | cv2.TERM_CRITERIA_COUNT,
-            100,
-            1e-6
-        )
+    kp2, des2 = orb.detectAndCompute(
+        gray_new,
+        None
+    )
 
-        _, warp_matrix = cv2.findTransformECC(
-            old_gray.astype(np.float32) / 255.0,
-            new_gray.astype(np.float32) / 255.0,
-            warp_matrix,
-            cv2.MOTION_EUCLIDEAN,
-            criteria
-        )
+    if (
+        des1 is None
+        or des2 is None
+        or len(kp1) < 10
+        or len(kp2) < 10
+    ):
+        return new_image
 
-        aligned_new = cv2.warpAffine(
-            new_image,
-            warp_matrix,
-            (old_w, old_h),
-            flags=(
-                cv2.INTER_LINEAR
-                + cv2.WARP_INVERSE_MAP
-            ),
-            borderMode=cv2.BORDER_REPLICATE
-        )
+    matcher = cv2.BFMatcher(
+        cv2.NORM_HAMMING,
+        crossCheck=True
+    )
 
-        return old_image, aligned_new
+    matches = matcher.match(
+        des1,
+        des2
+    )
 
-    except cv2.error:
+    if len(matches) < 10:
+        return new_image
 
-        return old_image, new_image
+    matches = sorted(
+        matches,
+        key=lambda x: x.distance
+    )
+
+    good_matches = matches[
+        :min(200, len(matches))
+    ]
+
+    if len(good_matches) < 10:
+        return new_image
+
+    src_pts = np.float32(
+        [
+            kp2[m.trainIdx].pt
+            for m in good_matches
+        ]
+    ).reshape(-1, 1, 2)
+
+    dst_pts = np.float32(
+        [
+            kp1[m.queryIdx].pt
+            for m in good_matches
+        ]
+    ).reshape(-1, 1, 2)
+
+    matrix, mask = cv2.estimateAffinePartial2D(
+        src_pts,
+        dst_pts,
+        method=cv2.RANSAC
+    )
+
+    if matrix is None:
+        return new_image
+
+    height, width = old_image.shape[:2]
+
+    aligned = cv2.warpAffine(
+        new_image,
+        matrix,
+        (width, height),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE
+    )
+
+    return aligned
 
 
 def find_differences(old_image, new_image):
+    """
+    找出兩張圖不同的位置。
+    """
 
-    old_image, new_image = align_images(
-        old_image,
-        new_image
-    )
-
-    old_gray = cv2.cvtColor(
+    gray_old = cv2.cvtColor(
         old_image,
         cv2.COLOR_BGR2GRAY
     )
 
-    new_gray = cv2.cvtColor(
+    gray_new = cv2.cvtColor(
         new_image,
         cv2.COLOR_BGR2GRAY
     )
 
-    old_gray = cv2.GaussianBlur(
-        old_gray,
+    gray_old = cv2.GaussianBlur(
+        gray_old,
         (3, 3),
         0
     )
 
-    new_gray = cv2.GaussianBlur(
-        new_gray,
+    gray_new = cv2.GaussianBlur(
+        gray_new,
         (3, 3),
         0
     )
 
     diff = cv2.absdiff(
-        old_gray,
-        new_gray
+        gray_old,
+        gray_new
     )
 
     _, thresh = cv2.threshold(
@@ -208,7 +276,7 @@ def find_differences(old_image, new_image):
     thresh = cv2.dilate(
         thresh,
         kernel,
-        iterations=2
+        iterations=1
     )
 
     contours, _ = cv2.findContours(
@@ -219,19 +287,20 @@ def find_differences(old_image, new_image):
 
     boxes = []
 
-    image_area = (
-        old_image.shape[0]
-        * old_image.shape[1]
-    )
+    height, width = old_image.shape[:2]
+
+    image_area = height * width
 
     min_area = max(
         80,
-        image_area * 0.00001
+        image_area * 0.00002
     )
 
     for contour in contours:
 
-        area = cv2.contourArea(contour)
+        area = cv2.contourArea(
+            contour
+        )
 
         if area < min_area:
             continue
@@ -240,28 +309,43 @@ def find_differences(old_image, new_image):
             contour
         )
 
-        if w < 8 or h < 8:
-            continue
-
         boxes.append(
-            (x, y, w, h)
+            {
+                "x": int(x),
+                "y": int(y),
+                "w": int(w),
+                "h": int(h),
+                "area": int(area)
+            }
         )
 
     boxes = sorted(
         boxes,
         key=lambda box: (
-            box[1],
-            box[0]
+            box["y"],
+            box["x"]
         )
     )
 
-    old_marked = old_image.copy()
-    new_marked = new_image.copy()
+    return boxes, thresh
 
-    for index, (x, y, w, h) in enumerate(
+
+def draw_differences(image, boxes):
+    """
+    在圖片上畫紅框與編號。
+    """
+
+    output = image.copy()
+
+    for index, box in enumerate(
         boxes,
         start=1
     ):
+
+        x = box["x"]
+        y = box["y"]
+        w = box["w"]
+        h = box["h"]
 
         padding = 10
 
@@ -269,126 +353,151 @@ def find_differences(old_image, new_image):
         y1 = max(0, y - padding)
 
         x2 = min(
-            old_image.shape[1] - 1,
+            output.shape[1] - 1,
             x + w + padding
         )
 
         y2 = min(
-            old_image.shape[0] - 1,
+            output.shape[0] - 1,
             y + h + padding
         )
 
         cv2.rectangle(
-            old_marked,
+            output,
             (x1, y1),
             (x2, y2),
             (0, 0, 255),
             3
         )
 
-        cv2.rectangle(
-            new_marked,
-            (x1, y1),
-            (x2, y2),
+        label = str(index)
+
+        cv2.circle(
+            output,
+            (x1 + 18, y1 + 18),
+            18,
             (0, 0, 255),
-            3
+            -1
         )
 
         cv2.putText(
-            old_marked,
-            str(index),
-            (x1, max(30, y1 - 8)),
+            output,
+            label,
+            (x1 + 11, y1 + 25),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.9,
-            (0, 0, 255),
-            3,
+            0.7,
+            (255, 255, 255),
+            2,
             cv2.LINE_AA
         )
 
-        cv2.putText(
-            new_marked,
-            str(index),
-            (x1, max(30, y1 - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.9,
-            (0, 0, 255),
-            3,
-            cv2.LINE_AA
-        )
-
-    return (
-        old_marked,
-        new_marked,
-        thresh,
-        boxes
-    )
+    return output
 
 
 @app.get("/")
 def index():
 
     return render_template(
-        "index.html",
-        items=LEGENDS
+        "index.html"
     )
 
 
 @app.post("/analyze")
 def analyze_api():
 
-    old = request.files.get("old")
-    new = request.files.get("new")
+    old_file = request.files.get("old")
+    new_file = request.files.get("new")
 
-    if not old or not new:
+    if not old_file or not new_file:
 
         return jsonify(
             error="請同時上傳原始圖與修改後圖"
         ), 400
 
     if (
-        not allowed(old.filename)
-        or not allowed(new.filename)
+        not allowed(old_file.filename)
+        or not allowed(new_file.filename)
     ):
 
         return jsonify(
             error="僅支援 PNG、JPG、JPEG、BMP、TIF、TIFF、PDF"
         ), 400
 
-    old_image = read_upload(old)
-    new_image = read_upload(new)
+    old_image = read_upload(
+        old_file
+    )
 
-    if old_image is None or new_image is None:
+    new_image = read_upload(
+        new_file
+    )
+
+    if (
+        old_image is None
+        or new_image is None
+    ):
 
         return jsonify(
             error="有圖片無法讀取"
         ), 400
 
-    (
-        old_marked,
-        new_marked,
-        diff_mask,
-        boxes
-    ) = find_differences(
+    old_image, new_image = resize_for_compare(
         old_image,
         new_image
     )
 
-    rows = [
-        {
-            "id": 0,
-            "name": "偵測到的圖面差異區域",
-            "old": 0,
-            "new": len(boxes),
-            "diff": len(boxes),
-        }
-    ]
+    new_aligned = align_images(
+        old_image,
+        new_image
+    )
+
+    boxes, diff_mask = find_differences(
+        old_image,
+        new_aligned
+    )
+
+    old_marked = draw_differences(
+        old_image,
+        boxes
+    )
+
+    new_marked = draw_differences(
+        new_aligned,
+        boxes
+    )
+
+    rows = []
+
+    for index, box in enumerate(
+        boxes,
+        start=1
+    ):
+
+        rows.append(
+            {
+                "id": index,
+                "name": f"差異 {index}",
+                "x": box["x"],
+                "y": box["y"],
+                "width": box["w"],
+                "height": box["h"],
+                "area": box["area"]
+            }
+        )
 
     return jsonify(
-        rows=rows,
-        difference_count=len(boxes),
-        old_image=encode_image(old_marked),
-        new_image=encode_image(new_marked),
-        diff_image=encode_image(diff_mask)
+        {
+            "count": len(boxes),
+            "rows": rows,
+            "old_image": image_to_base64(
+                old_marked
+            ),
+            "new_image": image_to_base64(
+                new_marked
+            ),
+            "diff_image": image_to_base64(
+                diff_mask
+            )
+        }
     )
 
 
@@ -396,18 +505,27 @@ def analyze_api():
 def export_csv():
 
     data = request.get_json()
-    rows = data.get("rows", [])
+
+    rows = data.get(
+        "rows",
+        []
+    )
 
     output = io.StringIO()
 
-    writer = csv.writer(output)
+    writer = csv.writer(
+        output
+    )
 
     writer.writerow(
         [
-            "設備／功能",
-            "原圖數量",
-            "新圖數量",
-            "增減"
+            "編號",
+            "差異項目",
+            "X座標",
+            "Y座標",
+            "寬度",
+            "高度",
+            "差異面積"
         ]
     )
 
@@ -415,10 +533,13 @@ def export_csv():
 
         writer.writerow(
             [
+                row.get("id", ""),
                 row.get("name", ""),
-                row.get("old", 0),
-                row.get("new", 0),
-                row.get("diff", 0),
+                row.get("x", ""),
+                row.get("y", ""),
+                row.get("width", ""),
+                row.get("height", ""),
+                row.get("area", "")
             ]
         )
 
@@ -427,7 +548,7 @@ def export_csv():
         mimetype="text/csv; charset=utf-8",
         headers={
             "Content-Disposition":
-                "attachment; filename=DrawDiff.csv"
+            "attachment; filename=DrawDiff.csv"
         }
     )
 
@@ -435,7 +556,10 @@ def export_csv():
 if __name__ == "__main__":
 
     port = int(
-        os.environ.get("PORT", 10000)
+        os.environ.get(
+            "PORT",
+            10000
+        )
     )
 
     app.run(
