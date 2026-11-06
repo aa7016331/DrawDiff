@@ -10,7 +10,10 @@
         content="width=device-width, initial-scale=1.0"
     >
 
-    <title>DrawDiff｜圖面差異自動核對</title>
+    <title>
+        DrawDiff｜圖面差異核對
+    </title>
+
 
     <style>
 
@@ -18,221 +21,421 @@
             box-sizing: border-box;
         }
 
+
         body {
+
             margin: 0;
+
             font-family:
                 "Microsoft JhengHei",
+                "Noto Sans TC",
                 Arial,
                 sans-serif;
+
             background: #f3f6f8;
-            color: #17212b;
+
+            color: #132333;
         }
+
 
         header {
-            background: #152534;
+
+            background: #152532;
+
             color: white;
-            padding: 32px 5%;
+
+            padding:
+                32px
+                7%;
         }
 
+
         header h1 {
-            margin: 0 0 8px 0;
+
+            margin: 0 0 8px;
+
             font-size: 32px;
         }
 
+
         header p {
+
             margin: 0;
-            color: #c7d2dc;
+
+            color: #c8d2d9;
         }
 
-        .container {
-            width: 94%;
-            max-width: 1600px;
-            margin: 30px auto 60px auto;
+
+        main {
+
+            max-width: 1400px;
+
+            margin: 35px auto;
+
+            padding: 0 25px;
         }
+
 
         .card {
+
             background: white;
-            border: 1px solid #d9e1e6;
+
+            border: 1px solid #d8e1e6;
+
             border-radius: 18px;
-            padding: 30px;
-            margin-bottom: 25px;
+
+            padding: 35px;
+
+            margin-bottom: 30px;
+
+            box-shadow:
+                0 4px 15px
+                rgba(0, 0, 0, 0.03);
         }
 
+
         h2 {
+
             margin-top: 0;
         }
 
+
         .upload-grid {
+
             display: grid;
+
             grid-template-columns:
-                repeat(2, 1fr);
+                1fr 1fr;
+
             gap: 25px;
         }
 
+
         .upload-box {
+
+            min-height: 190px;
+
             border:
-                2px dashed #b7c8d3;
+                2px dashed
+                #b8cad5;
+
             border-radius: 16px;
-            min-height: 170px;
-            padding: 30px;
+
             display: flex;
+
             flex-direction: column;
+
             justify-content: center;
+
             align-items: center;
+
+            padding: 25px;
+
+            text-align: center;
+
+            background: #fbfdfe;
         }
 
-        .upload-box h3 {
-            margin: 0 0 10px 0;
+
+        .upload-box strong {
+
+            font-size: 20px;
+
+            margin-bottom: 8px;
         }
 
-        .upload-box p {
-            color: #71808b;
-            margin-top: 0;
+
+        .hint {
+
+            color: #718190;
+
+            margin-bottom: 15px;
         }
+
 
         input[type="file"] {
+
             max-width: 100%;
         }
 
-        .buttons {
+
+        .actions {
+
             display: flex;
+
             justify-content: center;
+
             gap: 15px;
+
             margin-top: 25px;
+
             flex-wrap: wrap;
         }
 
+
         button {
-            border: none;
+
+            border: 0;
+
             border-radius: 12px;
-            padding: 15px 28px;
-            font-size: 18px;
+
+            padding:
+                15px
+                25px;
+
+            font-size: 17px;
+
             font-weight: bold;
+
             cursor: pointer;
+
+            transition:
+                transform .15s,
+                opacity .15s;
         }
 
-        #analyzeBtn {
-            background: #168371;
-            color: white;
+
+        button:hover {
+
+            transform:
+                translateY(-1px);
         }
 
-        #exportBtn {
-            background: #435563;
-            color: white;
-        }
 
         button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
+
+            opacity: .55;
+
+            cursor: wait;
         }
+
+
+        .primary {
+
+            background: #16816f;
+
+            color: white;
+        }
+
+
+        .secondary {
+
+            background: #435766;
+
+            color: white;
+        }
+
 
         #status {
+
             text-align: center;
+
             margin-top: 18px;
-            font-size: 16px;
+
+            font-weight: bold;
         }
 
-        .hidden {
+
+        .error {
+
+            color: #c62828;
+        }
+
+
+        .success {
+
+            color: #087c55;
+        }
+
+
+        #result {
+
             display: none;
         }
 
+
         .summary {
-            display: inline-block;
-            background: #eef3f5;
-            border-radius: 30px;
-            padding: 10px 18px;
-            margin-bottom: 20px;
+
+            display: inline-flex;
+
+            align-items: center;
+
+            gap: 10px;
+
+            background: #eef5f6;
+
+            padding:
+                10px
+                16px;
+
+            border-radius: 999px;
+
+            margin-bottom: 25px;
+
+            font-weight: bold;
         }
 
-        .comparison-grid {
+
+        .compare-grid {
+
             display: grid;
+
             grid-template-columns:
-                repeat(2, minmax(0, 1fr));
+                1fr 1fr;
+
             gap: 25px;
         }
 
+
         .image-panel {
-            border: 1px solid #d9e1e6;
-            border-radius: 15px;
-            overflow: hidden;
+
+            border: 1px solid #ccd9df;
+
+            border-radius: 12px;
+
+            padding: 15px;
+
             background: #fafcfd;
         }
 
+
         .image-title {
-            padding: 14px;
+
             text-align: center;
+
             font-weight: bold;
-            background: #edf2f5;
-            font-size: 18px;
+
+            margin-bottom: 12px;
         }
 
-        .image-wrap {
-            padding: 15px;
-            overflow: auto;
-            text-align: center;
-            max-height: 850px;
-        }
 
-        .image-wrap img {
-            max-width: 100%;
-            height: auto;
+        .image-panel img {
+
             display: block;
-            margin: auto;
+
+            width: 100%;
+
+            height: auto;
+
+            border: 1px solid #e0e6e9;
+
+            background: white;
         }
 
-        .diff-section {
+
+        .mask-panel {
+
             margin-top: 30px;
         }
 
-        .diff-image {
+
+        .mask-panel img {
+
+            display: block;
+
             width: 100%;
-            border: 1px solid #d9e1e6;
+
+            max-width: 100%;
+
+            margin-top: 12px;
+
+            background: black;
+
+            border: 1px solid #ccd9df;
         }
+
+
+        .table-wrap {
+
+            overflow-x: auto;
+
+            margin-top: 30px;
+        }
+
 
         table {
+
             width: 100%;
+
             border-collapse: collapse;
-            margin-top: 20px;
+
+            background: white;
         }
+
 
         th {
-            background: #edf2f5;
+
+            background: #eaf1f4;
+
+            padding: 12px;
+
+            text-align: left;
         }
 
-        th,
+
         td {
+
             padding: 12px;
+
             border-bottom:
-                1px solid #dce4e8;
-            text-align: center;
+                1px solid
+                #e2e9ed;
         }
+
 
         .number {
+
             display: inline-flex;
-            align-items: center;
+
             justify-content: center;
-            width: 30px;
-            height: 30px;
+
+            align-items: center;
+
+            width: 28px;
+
+            height: 28px;
+
             border-radius: 50%;
-            background: #d62828;
+
+            background: #e52323;
+
             color: white;
+
             font-weight: bold;
         }
 
+
         @media (
-            max-width: 850px
+            max-width: 800px
         ) {
 
             .upload-grid,
-            .comparison-grid {
+            .compare-grid {
+
                 grid-template-columns:
                     1fr;
             }
 
-            header h1 {
-                font-size: 25px;
+
+            header {
+
+                padding:
+                    25px;
             }
 
+
+            main {
+
+                padding:
+                    0 12px;
+            }
+
+
+            .card {
+
+                padding:
+                    20px;
+            }
         }
 
     </style>
@@ -242,198 +445,184 @@
 
 <body>
 
-    <header>
 
-        <h1>
-            DrawDiff｜
-            圖面差異自動核對
-        </h1>
+<header>
 
-        <p>
-            上傳原始圖與修改後圖，
-            系統將直接在兩張圖面上標示差異位置
-        </p>
+    <h1>
+        DrawDiff｜圖面差異核對
+    </h1>
 
-    </header>
+    <p>
+        自動對齊原始圖與修改後圖，左右同步標記差異位置
+    </p>
 
-
-    <main class="container">
+</header>
 
 
-        <!-- 上傳 -->
-
-        <section class="card">
-
-            <h2>上傳圖面</h2>
-
-            <div class="upload-grid">
+<main>
 
 
-                <div class="upload-box">
+    <!-- ================================================= -->
+    <!-- 上傳 -->
+    <!-- ================================================= -->
 
-                    <h3>原始圖</h3>
+    <section class="card">
 
-                    <p>
-                        JPG、PNG、PDF
-                    </p>
+        <h2>
+            上傳圖面
+        </h2>
 
-                    <input
-                        id="oldFile"
-                        type="file"
-                        accept="
-                            image/png,
-                            image/jpeg,
-                            application/pdf
-                        "
-                    >
 
+        <div class="upload-grid">
+
+
+            <div class="upload-box">
+
+                <strong>
+                    原始圖
+                </strong>
+
+                <div class="hint">
+                    JPG、PNG、PDF
                 </div>
 
+                <input
+                    id="oldFile"
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.pdf"
+                >
 
-                <div class="upload-box">
+            </div>
 
-                    <h3>修改後圖</h3>
 
-                    <p>
-                        JPG、PNG、PDF
-                    </p>
+            <div class="upload-box">
 
-                    <input
-                        id="newFile"
-                        type="file"
-                        accept="
-                            image/png,
-                            image/jpeg,
-                            application/pdf
-                        "
-                    >
+                <strong>
+                    修改後圖
+                </strong>
 
+                <div class="hint">
+                    JPG、PNG、PDF
                 </div>
 
-
-            </div>
-
-
-            <div class="buttons">
-
-                <button
-                    id="analyzeBtn"
+                <input
+                    id="newFile"
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.pdf"
                 >
-                    開始自動核對
-                </button>
-
-
-                <button
-                    id="exportBtn"
-                    disabled
-                >
-                    匯出 CSV
-                </button>
 
             </div>
 
 
-            <div id="status">
-
-                請先上傳兩張圖面
-
-            </div>
-
-        </section>
+        </div>
 
 
+        <div class="actions">
 
-        <!-- 結果 -->
-
-        <section
-            id="resultSection"
-            class="card hidden"
-        >
-
-            <h2>核對結果</h2>
-
-
-            <div
-                id="summary"
-                class="summary"
+            <button
+                id="analyzeButton"
+                class="primary"
             >
-            </div>
+                開始自動核對
+            </button>
 
 
-            <!-- 左右對照 -->
+            <button
+                id="exportButton"
+                class="secondary"
+                disabled
+            >
+                匯出 CSV
+            </button>
 
-            <div class="comparison-grid">
+        </div>
 
 
-                <div class="image-panel">
+        <div id="status">
+        </div>
 
-                    <div class="image-title">
 
-                        原始圖
-                        （紅框為差異位置）
+    </section>
 
-                    </div>
 
-                    <div class="image-wrap">
+    <!-- ================================================= -->
+    <!-- 結果 -->
+    <!-- ================================================= -->
 
-                        <img
-                            id="oldResult"
-                            alt="原始圖差異標記"
-                        >
+    <section
+        id="result"
+        class="card"
+    >
 
-                    </div>
 
+        <h2>
+            核對結果
+        </h2>
+
+
+        <div
+            id="summary"
+            class="summary"
+        >
+            尚未分析
+        </div>
+
+
+        <!-- 左右對照 -->
+
+        <div class="compare-grid">
+
+
+            <div class="image-panel">
+
+                <div class="image-title">
+                    原始圖（紅框為差異位置）
                 </div>
-
-
-
-                <div class="image-panel">
-
-                    <div class="image-title">
-
-                        修改後圖
-                        （紅框為差異位置）
-
-                    </div>
-
-                    <div class="image-wrap">
-
-                        <img
-                            id="newResult"
-                            alt="修改後圖差異標記"
-                        >
-
-                    </div>
-
-                </div>
-
-
-            </div>
-
-
-            <!-- 差異遮罩 -->
-
-            <div class="diff-section">
-
-                <h3>
-                    差異辨識區域
-                </h3>
 
                 <img
-                    id="diffResult"
-                    class="diff-image"
-                    alt="差異辨識圖"
+                    id="oldResult"
+                    alt="原始圖差異標記"
                 >
 
             </div>
 
 
+            <div class="image-panel">
 
-            <!-- 明細 -->
+                <div class="image-title">
+                    修改後圖（紅框為差異位置）
+                </div>
 
-            <h3>
-                差異明細
-            </h3>
+                <img
+                    id="newResult"
+                    alt="修改後圖差異標記"
+                >
+
+            </div>
+
+
+        </div>
+
+
+        <!-- 差異遮罩 -->
+
+        <div class="mask-panel">
+
+            <div class="image-title">
+                差異遮罩
+            </div>
+
+            <img
+                id="maskResult"
+                alt="差異遮罩"
+            >
+
+        </div>
+
+
+        <!-- 差異表 -->
+
+        <div class="table-wrap">
 
 
             <table>
@@ -442,330 +631,374 @@
 
                     <tr>
 
-                        <th>編號</th>
+                        <th>
+                            差異
+                        </th>
 
-                        <th>差異項目</th>
+                        <th>
+                            X
+                        </th>
 
-                        <th>X</th>
+                        <th>
+                            Y
+                        </th>
 
-                        <th>Y</th>
+                        <th>
+                            寬度
+                        </th>
 
-                        <th>寬度</th>
+                        <th>
+                            高度
+                        </th>
 
-                        <th>高度</th>
-
-                        <th>差異面積</th>
+                        <th>
+                            差異面積
+                        </th>
 
                     </tr>
 
                 </thead>
 
 
-                <tbody
-                    id="resultBody"
-                >
+                <tbody id="resultRows">
+
                 </tbody>
+
 
             </table>
 
 
-        </section>
+        </div>
 
 
-    </main>
+    </section>
 
 
-
-    <script>
-
-        let resultRows = [];
+</main>
 
 
-        const oldFile =
-            document.getElementById(
-                "oldFile"
+<script>
+
+
+    let latestRows = [];
+
+
+    const oldFile =
+        document.getElementById(
+            "oldFile"
+        );
+
+
+    const newFile =
+        document.getElementById(
+            "newFile"
+        );
+
+
+    const analyzeButton =
+        document.getElementById(
+            "analyzeButton"
+        );
+
+
+    const exportButton =
+        document.getElementById(
+            "exportButton"
+        );
+
+
+    const status =
+        document.getElementById(
+            "status"
+        );
+
+
+    // =====================================================
+    // 開始分析
+    // =====================================================
+
+    analyzeButton.addEventListener(
+        "click",
+        async () => {
+
+
+            if (
+                !oldFile.files.length
+                ||
+                !newFile.files.length
+            ) {
+
+                status.textContent =
+                    "請同時選擇原始圖與修改後圖";
+
+                status.className =
+                    "error";
+
+                return;
+            }
+
+
+            const formData =
+                new FormData();
+
+
+            formData.append(
+                "old",
+                oldFile.files[0]
             );
 
 
-        const newFile =
-            document.getElementById(
-                "newFile"
+            formData.append(
+                "new",
+                newFile.files[0]
             );
 
 
-        const analyzeBtn =
-            document.getElementById(
-                "analyzeBtn"
-            );
+            analyzeButton.disabled =
+                true;
 
 
-        const exportBtn =
-            document.getElementById(
-                "exportBtn"
-            );
+            exportButton.disabled =
+                true;
 
 
-        const status =
-            document.getElementById(
-                "status"
-            );
+            status.textContent =
+                "正在裁切、尋找共同特徵並自動對齊圖面…";
 
 
-        const resultSection =
-            document.getElementById(
-                "resultSection"
-            );
+            status.className =
+                "";
 
 
-        analyzeBtn.addEventListener(
-            "click",
-            async () => {
+            try {
 
-                if (
-                    !oldFile.files[0]
-                    ||
-                    !newFile.files[0]
-                ) {
 
-                    alert(
-                        "請同時選擇原始圖與修改後圖"
+                const response =
+                    await fetch(
+                        "/analyze",
+                        {
+                            method: "POST",
+                            body: formData
+                        }
                     );
 
-                    return;
 
+                const data =
+                    await response.json();
+
+
+                if (!response.ok) {
+
+                    throw new Error(
+                        data.error
+                        ||
+                        "分析失敗"
+                    );
                 }
 
 
-                const formData =
-                    new FormData();
+                document.getElementById(
+                    "oldResult"
+                ).src =
+                    data.old_image;
 
 
-                formData.append(
-                    "old",
-                    oldFile.files[0]
+                document.getElementById(
+                    "newResult"
+                ).src =
+                    data.new_image;
+
+
+                document.getElementById(
+                    "maskResult"
+                ).src =
+                    data.mask;
+
+
+                document.getElementById(
+                    "summary"
+                ).textContent =
+                    "共找到 "
+                    +
+                    data.difference_count
+                    +
+                    " 個差異";
+
+
+                latestRows =
+                    data.rows;
+
+
+                renderRows(
+                    data.rows
                 );
 
 
-                formData.append(
-                    "new",
-                    newFile.files[0]
-                );
+                document.getElementById(
+                    "result"
+                ).style.display =
+                    "block";
 
 
-                analyzeBtn.disabled = true;
-
-                exportBtn.disabled = true;
+                exportButton.disabled =
+                    false;
 
 
                 status.textContent =
-                    "正在比對圖面，請稍候...";
+                    "核對完成";
 
 
-                try {
-
-                    const response =
-                        await fetch(
-                            "/analyze",
-                            {
-                                method: "POST",
-                                body: formData
-                            }
-                        );
+                status.className =
+                    "success";
 
 
-                    const data =
-                        await response.json();
-
-
-                    if (
-                        !response.ok
-                    ) {
-
-                        throw new Error(
-                            data.error
-                            ||
-                            "核對失敗"
-                        );
-
+                document.getElementById(
+                    "result"
+                ).scrollIntoView(
+                    {
+                        behavior: "smooth",
+                        block: "start"
                     }
+                );
 
 
-                    resultRows =
-                        data.rows;
+            }
+            catch (error) {
 
 
-                    document.getElementById(
-                        "oldResult"
-                    ).src =
-                        data.old_image;
+                status.textContent =
+                    error.message;
 
 
-                    document.getElementById(
-                        "newResult"
-                    ).src =
-                        data.new_image;
+                status.className =
+                    "error";
+
+            }
+            finally {
 
 
-                    document.getElementById(
-                        "diffResult"
-                    ).src =
-                        data.diff_image;
+                analyzeButton.disabled =
+                    false;
+
+            }
 
 
-                    document.getElementById(
-                        "summary"
-                    ).textContent =
-                        "共找到 "
-                        +
-                        data.count
-                        +
-                        " 個差異位置";
+        }
+    );
 
 
-                    renderTable(
-                        data.rows
+    // =====================================================
+    // 顯示差異列表
+    // =====================================================
+
+    function renderRows(rows) {
+
+
+        const tbody =
+            document.getElementById(
+                "resultRows"
+            );
+
+
+        tbody.innerHTML =
+            "";
+
+
+        if (
+            !rows.length
+        ) {
+
+
+            tbody.innerHTML =
+                `
+                <tr>
+                    <td
+                        colspan="6"
+                    >
+                        沒有偵測到明顯差異
+                    </td>
+                </tr>
+                `;
+
+
+            return;
+        }
+
+
+        rows.forEach(
+            row => {
+
+
+                const tr =
+                    document.createElement(
+                        "tr"
                     );
 
 
-                    resultSection.classList.remove(
-                        "hidden"
-                    );
+                tr.innerHTML =
+                    `
+                    <td>
+                        <span class="number">
+                            ${row.id}
+                        </span>
+                    </td>
+
+                    <td>
+                        ${row.x}
+                    </td>
+
+                    <td>
+                        ${row.y}
+                    </td>
+
+                    <td>
+                        ${row.width}
+                    </td>
+
+                    <td>
+                        ${row.height}
+                    </td>
+
+                    <td>
+                        ${row.area}
+                    </td>
+                    `;
 
 
-                    exportBtn.disabled = false;
+                tbody.appendChild(
+                    tr
+                );
 
-
-                    status.textContent =
-                        "核對完成";
-
-                }
-
-                catch (error) {
-
-                    status.textContent =
-                        "核對失敗：" +
-                        error.message;
-
-                    alert(
-                        error.message
-                    );
-
-                }
-
-                finally {
-
-                    analyzeBtn.disabled = false;
-
-                }
 
             }
         );
 
 
+    }
 
-        function renderTable(rows) {
 
-            const body =
-                document.getElementById(
-                    "resultBody"
+    // =====================================================
+    // 匯出 CSV
+    // =====================================================
+
+    exportButton.addEventListener(
+        "click",
+        async () => {
+
+
+            if (
+                !latestRows.length
+            ) {
+
+                alert(
+                    "目前沒有差異資料可以匯出"
                 );
 
-
-            body.innerHTML = "";
-
-
-            rows.forEach(
-                row => {
-
-                    const tr =
-                        document.createElement(
-                            "tr"
-                        );
+                return;
+            }
 
 
-                    tr.innerHTML = `
-
-                        <td>
-
-                            <span class="number">
-
-                                ${row.id}
-
-                            </span>
-
-                        </td>
-
-
-                        <td>
-
-                            ${row.name}
-
-                        </td>
-
-
-                        <td>
-
-                            ${row.x}
-
-                        </td>
-
-
-                        <td>
-
-                            ${row.y}
-
-                        </td>
-
-
-                        <td>
-
-                            ${row.width}
-
-                        </td>
-
-
-                        <td>
-
-                            ${row.height}
-
-                        </td>
-
-
-                        <td>
-
-                            ${row.area}
-
-                        </td>
-
-                    `;
-
-
-                    body.appendChild(
-                        tr
-                    );
-
-                }
-            );
-
-        }
-
-
-
-        exportBtn.addEventListener(
-            "click",
-            async () => {
-
-                if (
-                    resultRows.length === 0
-                ) {
-
-                    alert(
-                        "目前沒有核對結果"
-                    );
-
-                    return;
-
-                }
+            try {
 
 
                 const response =
@@ -783,11 +1016,21 @@
                                 JSON.stringify(
                                     {
                                         rows:
-                                            resultRows
+                                            latestRows
                                     }
                                 )
                         }
                     );
+
+
+                if (
+                    !response.ok
+                ) {
+
+                    throw new Error(
+                        "CSV 匯出失敗"
+                    );
+                }
 
 
                 const blob =
@@ -806,7 +1049,9 @@
                     );
 
 
-                a.href = url;
+                a.href =
+                    url;
+
 
                 a.download =
                     "DrawDiff.csv";
@@ -827,10 +1072,23 @@
                     url
                 );
 
-            }
-        );
 
-    </script>
+            }
+            catch (error) {
+
+
+                alert(
+                    error.message
+                );
+
+            }
+
+
+        }
+    );
+
+
+</script>
 
 
 </body>
