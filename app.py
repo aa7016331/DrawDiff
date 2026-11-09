@@ -434,61 +434,587 @@ def detect_one_symbol(plan_gray, template):
 # 13 種品項全部辨識
 # ============================================================
 
+
 def detect_symbols(image, templates):
 
     gray = prepare_plan(image)
 
     original_h, original_w = gray.shape
 
-    # 大圖先縮小，降低運算量
+    # 大圖才縮小，保留小型設備符號的細節
     ratio = min(
         1.0,
-        MAX_PLAN_SIDE / max(original_h, original_w)
+        1600 / max(original_h, original_w)
     )
 
     if ratio < 1.0:
-
         search_w = max(1, int(original_w * ratio))
         search_h = max(1, int(original_h * ratio))
 
-        search_gray = cv2.resize(
+        gray = cv2.resize(
             gray,
             (search_w, search_h),
             interpolation=cv2.INTER_AREA
         )
 
-    else:
+    scale_x = original_w / gray.shape[1]
+    scale_y = original_h / gray.shape[0]
 
-        search_gray = gray
+    edge = cv2.Canny(gray, 45, 130)
 
-    scale_x = original_w / search_gray.shape[1]
-    scale_y = original_h / search_gray.shape[0]
+    # 依照實際圖面設定各品項的比對門檻
+    thresholds = {
+        0: 0.72,
+        1: 0.53,
+        2: 0.50,
+        3: 0.65,
+        4: 0.58,
+        5: 0.58,
+        6: 0.75,
+        7: 0.60,
+        8: 0.54,
+        9: 0.76,
+        10: 0.73,
+        11: 0.73,
+        12: 0.60
+    }
+
+    # 不同品項使用不同最小縮放比例
+    min_scales = {
+        0: 0.40,
+        1: 0.35,
+        2: 0.35,
+        3: 0.40,
+        4: 0.40,
+        5: 0.40,
+        6: 0.45,
+        7: 0.40,
+        8: 0.40,
+        9: 0.50,
+        10: 0.50,
+        11: 0.50,
+        12: 0.55
+    }
+
+    letter_ids = {
+        2, 4, 5, 6, 7, 9, 10, 11, 12
+    }
+
+    letter_thresholds = {
+        2: 0.35,
+        4: 0.40,
+        5: 0.40,
+        6: 0.72,
+        7: 0.42,
+        9: 0.56,
+        10: 0.42,
+        11: 0.50,
+        12: 0.56
+    }
+
+    core_x_fraction = {
+        0: 0.50,
+        1: 0.50,
+        2: 0.40,
+        3: 0.50,
+        4: 0.42,
+        5: 0.40,
+        6: 0.40,
+        7: 0.40,
+        8: 0.50,
+        9: 0.40,
+        10: 0.40,
+        11: 0.40,
+        12: 0.40
+    }
+
+    # --------------------------------------------------------
+    # 旋轉模板
+    # --------------------------------------------------------
+
+    def rotate_image(img, angle):
+
+        if angle == 0:
+            return img
+
+        if angle == 90:
+            return cv2.rotate(
+                img,
+                cv2.ROTATE_90_CLOCKWISE
+            )
+
+        if angle == 180:
+            return cv2.rotate(
+                img,
+                cv2.ROTATE_180
+            )
+
+        return cv2.rotate(
+            img,
+            cv2.ROTATE_90_COUNTERCLOCKWISE
+        )
+
+    def rotate_point(x, y, w, h, angle):
+
+        if angle == 0:
+            return x, y
+
+        if angle == 90:
+            return h - 1 - y, x
+
+        if angle == 180:
+            return w - 1 - x, h - 1 - y
+
+        return y, w - 1 - x
+
+    # --------------------------------------------------------
+    # 驗證外圈是否有真正的圓形線條
+    # --------------------------------------------------------
+
+    def check_circle(edge_image, cx, cy, radius):
+
+        if radius < 3:
+            return 0.0
+
+        sectors = 36
+        matched = 0
+
+        for i in range(sectors):
+
+            angle = (
+                2 * np.pi * (i + 0.5) / sectors
+            )
+
+            found = False
+
+            for r in (
+                radius - 1.5,
+                radius,
+                radius + 1.5
+            ):
+
+                px = int(round(
+                    cx + r * np.cos(angle)
+                ))
+
+                py = int(round(
+                    cy + r * np.sin(angle)
+                ))
+
+                if (
+                    0 <= px < edge_image.shape[1]
+                    and 0 <= py < edge_image.shape[0]
+                    and edge_image[py, px] > 0
+                ):
+
+                    found = True
+                    break
+
+            if found:
+                matched += 1
+
+        return matched / sectors
+
+    # --------------------------------------------------------
+    # 驗證符號旁邊的英文字母
+    # --------------------------------------------------------
+
+    def check_letter(
+        original_template,
+        resized_template,
+        mask,
+        x,
+        y
+    ):
+
+        mask_resized = cv2.resize(
+            mask,
+            (
+                resized_template.shape[1],
+                resized_template.shape[0]
+            ),
+            interpolation=cv2.INTER_NEAREST
+        )
+
+        ys, xs = np.where(mask_resized > 0)
+
+        if len(xs) < 5:
+            return None
+
+        x1 = int(xs.min())
+        y1 = int(ys.min())
+        x2 = int(xs.max()) + 1
+        y2 = int(ys.max()) + 1
+
+        letter_template = resized_template[
+            y1:y2,
+            x1:x2
+        ]
+
+        if (
+            letter_template.size == 0
+            or np.std(letter_template) < 3
+        ):
+            return None
+
+        best_score = -1.0
+
+        for dy in (-2, -1, 0, 1, 2):
+            for dx in (-2, -1, 0, 1, 2):
+
+                tx = x + x1 + dx
+                ty = y + y1 + dy
+
+                if (
+                    tx < 0
+                    or ty < 0
+                    or tx + letter_template.shape[1] > gray.shape[1]
+                    or ty + letter_template.shape[0] > gray.shape[0]
+                ):
+                    continue
+
+                patch = gray[
+                    ty:ty + letter_template.shape[0],
+                    tx:tx + letter_template.shape[1]
+                ]
+
+                if np.std(patch) < 3:
+                    continue
+
+                score = cv2.matchTemplate(
+                    patch,
+                    letter_template,
+                    cv2.TM_CCOEFF_NORMED
+                )[0, 0]
+
+                best_score = max(
+                    best_score,
+                    float(score)
+                )
+
+        return (
+            best_score
+            if best_score >= 0
+            else None
+        )
+
+    # --------------------------------------------------------
+    # 開始辨識
+    # --------------------------------------------------------
 
     results = {}
 
+    scales = (
+        0.35,
+        0.42,
+        0.49,
+        0.56,
+        0.63,
+        0.70,
+        0.77,
+        0.84
+    )
+
     for symbol_id, template in templates.items():
 
-        matches = detect_one_symbol(
-            search_gray,
-            template
+        candidates = []
+
+        th0, tw0 = template.shape
+
+        threshold = thresholds.get(
+            symbol_id,
+            0.70
         )
 
-        # 還原成原始圖面的座標
+        # ----------------------------------------------------
+        # 四個方向
+        # ----------------------------------------------------
+
+        for angle in (
+            0,
+            90,
+            180,
+            270
+        ):
+
+            rotated = rotate_image(
+                template,
+                angle
+            )
+
+            rh, rw = rotated.shape
+
+            core_x, core_y = rotate_point(
+                tw0 * core_x_fraction[symbol_id],
+                th0 * 0.5,
+                tw0,
+                th0,
+                angle
+            )
+
+            # ------------------------------------------------
+            # 多尺寸搜尋
+            # ------------------------------------------------
+
+            for scale in scales:
+
+                if scale < min_scales[symbol_id]:
+                    continue
+
+                width = max(
+                    8,
+                    int(rw * scale)
+                )
+
+                height = max(
+                    8,
+                    int(rh * scale)
+                )
+
+                if (
+                    width >= gray.shape[1]
+                    or height >= gray.shape[0]
+                ):
+                    continue
+
+                resized = cv2.resize(
+                    rotated,
+                    (width, height),
+                    interpolation=cv2.INTER_AREA
+                )
+
+                response = cv2.matchTemplate(
+                    gray,
+                    resized,
+                    cv2.TM_CCOEFF_NORMED
+                )
+
+                # 只取局部最高相似度位置
+                kw = max(
+                    3,
+                    int(width * 0.60) // 2 * 2 + 1
+                )
+
+                kh = max(
+                    3,
+                    int(height * 0.60) // 2 * 2 + 1
+                )
+
+                local_max = cv2.dilate(
+                    response,
+                    cv2.getStructuringElement(
+                        cv2.MORPH_RECT,
+                        (kw, kh)
+                    )
+                )
+
+                ys, xs = np.where(
+                    (response >= threshold)
+                    &
+                    (response >= local_max - 0.000001)
+                )
+
+                # 限制每種尺寸的候選數量
+                if len(xs) > 15:
+
+                    scores = response[ys, xs]
+
+                    indices = np.argsort(
+                        scores
+                    )[-15:]
+
+                    ys = ys[indices]
+                    xs = xs[indices]
+
+                for yy, xx in zip(ys, xs):
+
+                    score = float(
+                        response[yy, xx]
+                    )
+
+                    # ----------------------------------------
+                    # 外圈驗證
+                    # ----------------------------------------
+
+                    if symbol_id != 0:
+
+                        cx = (
+                            xx
+                            + core_x * width / rw
+                        )
+
+                        cy = (
+                            yy
+                            + core_y * height / rh
+                        )
+
+                        radius = (
+                            min(th0, tw0)
+                            * 0.36
+                            * scale
+                        )
+
+                        circle_score = check_circle(
+                            edge,
+                            cx,
+                            cy,
+                            radius
+                        )
+
+                        if circle_score < 0.48:
+                            continue
+
+                    else:
+
+                        circle_score = 1.0
+
+                    # ----------------------------------------
+                    # 字母驗證
+                    # ----------------------------------------
+
+                    letter_score = None
+
+                    if symbol_id in letter_ids:
+
+                        letter_mask = np.zeros(
+                            (th0, tw0),
+                            np.uint8
+                        )
+
+                        letter_mask[
+                            int(th0 * 0.38):,
+                            int(tw0 * 0.68):
+                        ] = 255
+
+                        rotated_mask = rotate_image(
+                            letter_mask,
+                            angle
+                        )
+
+                        letter_score = check_letter(
+                            rotated,
+                            resized,
+                            rotated_mask,
+                            int(xx),
+                            int(yy)
+                        )
+
+                        if (
+                            letter_score is None
+                            or letter_score < letter_thresholds[symbol_id]
+                        ):
+                            continue
+
+                    # ----------------------------------------
+                    # 綜合分數
+                    # ----------------------------------------
+
+                    combined_score = score
+
+                    if letter_score is not None:
+
+                        combined_score = (
+                            0.70 * score
+                            +
+                            0.30 * letter_score
+                        )
+
+                    combined_score = (
+                        0.90 * combined_score
+                        +
+                        0.10 * circle_score
+                    )
+
+                    candidates.append({
+                        "x": int(xx),
+                        "y": int(yy),
+                        "w": int(width),
+                        "h": int(height),
+                        "score": float(combined_score),
+                        "angle": angle
+                    })
+
+        # ----------------------------------------------------
+        # 同一品項重複結果排除
+        # ----------------------------------------------------
+
+        candidates.sort(
+            key=lambda item: item["score"],
+            reverse=True
+        )
+
+        kept = []
+
+        for candidate in candidates:
+
+            cx = (
+                candidate["x"]
+                + candidate["w"] / 2
+            )
+
+            cy = (
+                candidate["y"]
+                + candidate["h"] / 2
+            )
+
+            duplicate = False
+
+            for existing in kept:
+
+                ex = (
+                    existing["x"]
+                    + existing["w"] / 2
+                )
+
+                ey = (
+                    existing["y"]
+                    + existing["h"] / 2
+                )
+
+                distance = (
+                    (cx - ex) ** 2
+                    +
+                    (cy - ey) ** 2
+                ) ** 0.5
+
+                min_size = min(
+                    candidate["w"],
+                    candidate["h"],
+                    existing["w"],
+                    existing["h"]
+                )
+
+                if distance < max(
+                    7,
+                    min_size * 0.65
+                ):
+
+                    duplicate = True
+                    break
+
+            if not duplicate:
+                kept.append(candidate)
+
+        # ----------------------------------------------------
+        # 還原原始圖片座標
+        # ----------------------------------------------------
+
         restored = []
 
-        for match in matches:
+        for item in kept:
 
             restored.append({
-                "x": int(round(match["x"] * scale_x)),
-                "y": int(round(match["y"] * scale_y)),
-                "w": int(round(match["w"] * scale_x)),
-                "h": int(round(match["h"] * scale_y)),
-                "score": match["score"]
+                "x": int(round(item["x"] * scale_x)),
+                "y": int(round(item["y"] * scale_y)),
+                "w": int(round(item["w"] * scale_x)),
+                "h": int(round(item["h"] * scale_y)),
+                "score": item["score"]
             })
 
         results[symbol_id] = restored
 
     return results
+
 
 
 
