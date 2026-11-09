@@ -16,6 +16,29 @@ ALLOWED = {
     "png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"
 }
 
+# ============================================================
+# 品項圖庫
+# ============================================================
+
+SYMBOL_DIR = BASE / "symbols"
+
+SYMBOL_NAMES = {
+    0: "住戶開關箱與弱電箱整合",
+    1: "馬桶專用插座 H:30cm",
+    2: "抽油煙機插座 H:天花板內",
+    3: "雙聯插座 H:30cm，電視牆 H:80cm",
+    4: "雙聯插座 H:110cm",
+    5: "洗碗機專用插座 H:45cm",
+    6: "微波烤箱專用插座 220V(H:55cm)",
+    7: "洗衣機插座(防雨型) H:120cm",
+    8: "廚房檯櫃燈用電源出線口 H:170cm",
+    9: "暖風乾燥機電源出口 220V(H:天花)",
+    10: "雙聯紅色緊急插座(弱電、箱體內)",
+    11: "雙聯紅色緊急插座(冰箱 H:30cm、電視牆 H:80cm)",
+    12: "冷氣電源出口 220V(H:天花板)"
+}
+
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 
@@ -25,6 +48,7 @@ app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 # ============================================================
 
 def allowed(filename):
+
     return (
         "." in filename
         and filename.rsplit(".", 1)[1].lower() in ALLOWED
@@ -32,12 +56,9 @@ def allowed(filename):
 
 
 def read_upload(file):
-    """
-    讀取圖片或 PDF。
-    PDF 目前使用第一頁。
-    """
 
     ext = file.filename.rsplit(".", 1)[1].lower()
+
     raw = file.read()
 
     if ext == "pdf":
@@ -80,9 +101,6 @@ def read_upload(file):
 
 
 def image_to_base64(image):
-    """
-    OpenCV 圖片轉成前端可顯示的 Base64。
-    """
 
     if image is None:
         return None
@@ -106,13 +124,271 @@ def image_to_base64(image):
 
 
 # ============================================================
+# 載入品項圖案
+# ============================================================
+
+def load_symbol_templates():
+
+    templates = {}
+
+    for symbol_id in SYMBOL_NAMES:
+
+        path = SYMBOL_DIR / f"{symbol_id}.png"
+
+        if not path.exists():
+            continue
+
+        image = cv2.imread(
+            str(path),
+            cv2.IMREAD_GRAYSCALE
+        )
+
+        if image is None:
+            continue
+
+
+        # ----------------------------------------------------
+        # 去除純白邊
+        # ----------------------------------------------------
+
+        _, binary = cv2.threshold(
+            image,
+            245,
+            255,
+            cv2.THRESH_BINARY_INV
+        )
+
+        coords = cv2.findNonZero(
+            binary
+        )
+
+        if coords is not None:
+
+            x, y, w, h = cv2.boundingRect(
+                coords
+            )
+
+            padding = 3
+
+            x1 = max(0, x - padding)
+            y1 = max(0, y - padding)
+
+            x2 = min(
+                image.shape[1],
+                x + w + padding
+            )
+
+            y2 = min(
+                image.shape[0],
+                y + h + padding
+            )
+
+            image = image[
+                y1:y2,
+                x1:x2
+            ]
+
+
+        templates[symbol_id] = image
+
+
+    return templates
+
+
+# ============================================================
+# 品項辨識
+# ============================================================
+
+def classify_symbol(roi, templates):
+
+    """
+    將差異區域與 0~12.png 圖庫進行比對。
+
+    回傳：
+    symbol_id
+    symbol_name
+    confidence
+    """
+
+    if roi is None or roi.size == 0:
+
+        return None, "未辨識", 0.0
+
+
+    gray = cv2.cvtColor(
+        roi,
+        cv2.COLOR_BGR2GRAY
+    )
+
+
+    # --------------------------------------------------------
+    # ROI 二值化
+    # --------------------------------------------------------
+
+    _, roi_binary = cv2.threshold(
+        gray,
+        200,
+        255,
+        cv2.THRESH_BINARY_INV
+    )
+
+
+    # 稍微去除雜訊
+    roi_binary = cv2.morphologyEx(
+        roi_binary,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(
+            cv2.MORPH_RECT,
+            (2, 2)
+        )
+    )
+
+
+    best_id = None
+    best_score = -1.0
+
+
+    for symbol_id, template in templates.items():
+
+        if template is None:
+            continue
+
+
+        # ----------------------------------------------------
+        # Template 二值化
+        # ----------------------------------------------------
+
+        _, template_binary = cv2.threshold(
+            template,
+            200,
+            255,
+            cv2.THRESH_BINARY_INV
+        )
+
+
+        template_h, template_w = (
+            template_binary.shape[:2]
+        )
+
+
+        roi_h, roi_w = (
+            roi_binary.shape[:2]
+        )
+
+
+        if (
+            template_h < 5
+            or template_w < 5
+        ):
+            continue
+
+
+        # ----------------------------------------------------
+        # 多尺寸比對
+        #
+        # 因為圖面中的設備符號
+        # 可能比原始圖庫大或小
+        # ----------------------------------------------------
+
+        for scale in np.linspace(
+            0.5,
+            2.5,
+            13
+        ):
+
+            resized_w = int(
+                template_w * scale
+            )
+
+            resized_h = int(
+                template_h * scale
+            )
+
+
+            if (
+                resized_w < 5
+                or resized_h < 5
+            ):
+                continue
+
+
+            if (
+                resized_w > roi_w
+                or resized_h > roi_h
+            ):
+                continue
+
+
+            resized_template = cv2.resize(
+                template_binary,
+                (
+                    resized_w,
+                    resized_h
+                ),
+                interpolation=cv2.INTER_AREA
+            )
+
+
+            try:
+
+                result = cv2.matchTemplate(
+                    roi_binary,
+                    resized_template,
+                    cv2.TM_CCOEFF_NORMED
+                )
+
+                _, max_val, _, _ = cv2.minMaxLoc(
+                    result
+                )
+
+            except cv2.error:
+
+                continue
+
+
+            if max_val > best_score:
+
+                best_score = float(
+                    max_val
+                )
+
+                best_id = symbol_id
+
+
+    # --------------------------------------------------------
+    # 信心值門檻
+    #
+    # 目前先設 0.42
+    # 之後可以依實際圖面再調整
+    # ----------------------------------------------------
+
+    if (
+        best_id is None
+        or best_score < 0.42
+    ):
+
+        return (
+            None,
+            "未辨識",
+            round(best_score, 3)
+        )
+
+
+    return (
+        best_id,
+        SYMBOL_NAMES.get(
+            best_id,
+            "未辨識"
+        ),
+        round(best_score, 3)
+    )
+
+
+# ============================================================
 # 裁掉白邊
 # ============================================================
 
 def crop_white_border(image):
-    """
-    移除圖面外圍大量白色空白。
-    """
 
     gray = cv2.cvtColor(
         image,
@@ -178,10 +454,6 @@ def preprocess_for_alignment(image):
 # ============================================================
 
 def align_images(old_image, new_image):
-    """
-    使用 ORB + BFMatcher + RANSAC
-    將修改後圖對齊到原始圖。
-    """
 
     old_gray = preprocess_for_alignment(
         old_image
@@ -214,7 +486,7 @@ def align_images(old_image, new_image):
         or len(kp2) < 10
     ):
 
-        resized = cv2.resize(
+        return cv2.resize(
             new_image,
             (
                 old_image.shape[1],
@@ -222,8 +494,6 @@ def align_images(old_image, new_image):
             ),
             interpolation=cv2.INTER_CUBIC
         )
-
-        return resized
 
 
     matcher = cv2.BFMatcher(
@@ -252,7 +522,7 @@ def align_images(old_image, new_image):
 
     if len(good) < 10:
 
-        resized = cv2.resize(
+        return cv2.resize(
             new_image,
             (
                 old_image.shape[1],
@@ -260,8 +530,6 @@ def align_images(old_image, new_image):
             ),
             interpolation=cv2.INTER_CUBIC
         )
-
-        return resized
 
 
     good = sorted(
@@ -275,22 +543,15 @@ def align_images(old_image, new_image):
             kp2[m.queryIdx].pt
             for m in good
         ]
-    ).reshape(
-        -1,
-        1,
-        2
-    )
+    ).reshape(-1, 1, 2)
+
 
     dst_points = np.float32(
         [
             kp1[m.trainIdx].pt
             for m in good
         ]
-    ).reshape(
-        -1,
-        1,
-        2
-    )
+    ).reshape(-1, 1, 2)
 
 
     matrix, inliers = cv2.estimateAffinePartial2D(
@@ -305,7 +566,7 @@ def align_images(old_image, new_image):
 
     if matrix is None:
 
-        resized = cv2.resize(
+        return cv2.resize(
             new_image,
             (
                 old_image.shape[1],
@@ -314,10 +575,8 @@ def align_images(old_image, new_image):
             interpolation=cv2.INTER_CUBIC
         )
 
-        return resized
 
-
-    aligned_new = cv2.warpAffine(
+    return cv2.warpAffine(
         new_image,
         matrix,
         (
@@ -330,21 +589,11 @@ def align_images(old_image, new_image):
     )
 
 
-    return aligned_new
-
-
 # ============================================================
-# 細部對齊
+# 細部平移修正
 # ============================================================
 
 def refine_translation(old_image, new_image):
-    """
-    ORB 對齊後，再用 phase correlation
-    做細微平移修正。
-
-    這一步主要是避免圖面只差 1~3 像素，
-    卻造成整張圖被判定為差異。
-    """
 
     old_gray = cv2.cvtColor(
         old_image,
@@ -383,7 +632,6 @@ def refine_translation(old_image, new_image):
     dx, dy = shift
 
 
-    # 只有可信且很小的微調才採用
     if (
         response < 0.05
         or abs(dx) > 20
@@ -414,21 +662,10 @@ def refine_translation(old_image, new_image):
 
 
 # ============================================================
-# 找局部真正差異
+# 找真正差異
 # ============================================================
 
 def find_differences(old_image, aligned_new):
-    """
-    不再直接把整張圖的灰階 absdiff 拿來圈。
-
-    新邏輯：
-
-    1. 先把兩張圖轉成二值圖。
-    2. 做小範圍容錯，避免線條因 1~2 像素偏移被判定。
-    3. 找出「一張有墨跡、另一張附近沒有」的局部區域。
-    4. 排除細長線、文字碎片與過大的區域。
-    5. 合併同一設備附近的差異。
-    """
 
     old_gray = cv2.cvtColor(
         old_image,
@@ -440,10 +677,6 @@ def find_differences(old_image, aligned_new):
         cv2.COLOR_BGR2GRAY
     )
 
-
-    # --------------------------------------------------------
-    # 自適應二值化
-    # --------------------------------------------------------
 
     old_blur = cv2.GaussianBlur(
         old_gray,
@@ -473,13 +706,6 @@ def find_differences(old_image, aligned_new):
     )
 
 
-    # --------------------------------------------------------
-    # 容忍微小對齊誤差
-    #
-    # 將線條稍微膨脹後再比較：
-    # 兩張圖相同位置附近都有線，就不算差異。
-    # --------------------------------------------------------
-
     tolerance_kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
         (5, 5)
@@ -498,14 +724,11 @@ def find_differences(old_image, aligned_new):
     )
 
 
-    # 原始圖有、新圖附近沒有
     removed = cv2.bitwise_and(
         old_ink,
         cv2.bitwise_not(new_near)
     )
 
-
-    # 新圖有、原始圖附近沒有
     added = cv2.bitwise_and(
         new_ink,
         cv2.bitwise_not(old_near)
@@ -517,10 +740,6 @@ def find_differences(old_image, aligned_new):
         added
     )
 
-
-    # --------------------------------------------------------
-    # 去除非常細小的雜訊
-    # --------------------------------------------------------
 
     small_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
@@ -534,14 +753,6 @@ def find_differences(old_image, aligned_new):
         iterations=1
     )
 
-
-    # --------------------------------------------------------
-    # 把同一個設備的小筆畫連起來
-    #
-    # 注意：
-    # 不再使用很大的 11x11 + 多次 CLOSE，
-    # 避免整張圖的線條全部連成大區塊。
-    # --------------------------------------------------------
 
     connect_kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
@@ -584,10 +795,6 @@ def find_differences(old_image, aligned_new):
         area = w * h
 
 
-        # ----------------------------------------------------
-        # 基本大小過濾
-        # ----------------------------------------------------
-
         if area < 120:
             continue
 
@@ -595,7 +802,6 @@ def find_differences(old_image, aligned_new):
             continue
 
 
-        # 太細長的通常是尺寸線、牆線、文字線
         aspect = max(
             w / max(h, 1),
             h / max(w, 1)
@@ -604,13 +810,6 @@ def find_differences(old_image, aligned_new):
         if aspect > 12:
             continue
 
-
-        # ----------------------------------------------------
-        # 計算真正差異像素比例
-        #
-        # 外框很大但裡面只有幾條線，
-        # 很可能不是一個真正設備修改。
-        # ----------------------------------------------------
 
         roi = mask[
             y:y + h,
@@ -631,10 +830,6 @@ def find_differences(old_image, aligned_new):
             continue
 
 
-        # ----------------------------------------------------
-        # 過小的文字碎片排除
-        # ----------------------------------------------------
-
         if w < 8 or h < 8:
             continue
 
@@ -649,9 +844,9 @@ def find_differences(old_image, aligned_new):
         )
 
 
-    # ========================================================
-    # 合併靠近的候選區域
-    # ========================================================
+    # --------------------------------------------------------
+    # 合併附近差異
+    # --------------------------------------------------------
 
     merged = []
 
@@ -673,10 +868,7 @@ def find_differences(old_image, aligned_new):
             ex2 = ex1 + existing["w"]
             ey2 = ey1 + existing["h"]
 
-
-            # 允許設備附近的小差異合併
             padding = 18
-
 
             overlap = not (
                 bx2 < ex1 - padding
@@ -684,7 +876,6 @@ def find_differences(old_image, aligned_new):
                 or by2 < ey1 - padding
                 or by1 > ey2 + padding
             )
-
 
             if overlap:
 
@@ -724,18 +915,11 @@ def find_differences(old_image, aligned_new):
                 by2
             )
 
-
             existing["x"] = int(nx1)
             existing["y"] = int(ny1)
             existing["w"] = int(nx2 - nx1)
             existing["h"] = int(ny2 - ny1)
 
-
-    # ========================================================
-    # 第二次過濾
-    #
-    # 合併後太大的區域通常仍是圖面整體誤差
-    # ========================================================
 
     final_differences = []
 
@@ -752,7 +936,6 @@ def find_differences(old_image, aligned_new):
             continue
 
 
-        # 避免框變成非常長的牆線
         aspect = max(
             box["w"] / max(box["h"], 1),
             box["h"] / max(box["w"], 1)
@@ -762,7 +945,6 @@ def find_differences(old_image, aligned_new):
             continue
 
 
-        # 加一些外框邊界，讓設備比較容易看清楚
         padding = 8
 
         x1 = max(
@@ -796,7 +978,6 @@ def find_differences(old_image, aligned_new):
         )
 
 
-    # 由上到下、左到右排序
     final_differences.sort(
         key=lambda d: (
             d["y"],
@@ -809,7 +990,7 @@ def find_differences(old_image, aligned_new):
 
 
 # ============================================================
-# 在圖片上畫同步差異圈
+# 畫同步差異圈
 # ============================================================
 
 def draw_difference_boxes(image, differences):
@@ -828,22 +1009,16 @@ def draw_difference_boxes(image, differences):
         h = diff["h"]
 
 
-        # ----------------------------------------------------
-        # 使用圓圈，而不是大紅色矩形
-        # ----------------------------------------------------
-
         center_x = x + w // 2
         center_y = y + h // 2
 
+
         radius = max(
             14,
-            int(
-                max(w, h) * 0.65
-            )
+            int(max(w, h) * 0.65)
         )
 
 
-        # 紅色圈圈
         cv2.circle(
             result,
             (
@@ -855,10 +1030,6 @@ def draw_difference_boxes(image, differences):
             3
         )
 
-
-        # ----------------------------------------------------
-        # 編號紅色圓點
-        # ----------------------------------------------------
 
         label_x = max(
             14,
@@ -891,6 +1062,7 @@ def draw_difference_boxes(image, differences):
             0.55,
             2
         )
+
 
         text_x = int(
             label_x
@@ -981,7 +1153,7 @@ def analyze_api():
 
 
     # --------------------------------------------------------
-    # 1. 裁掉外圍白邊
+    # 1. 裁掉白邊
     # --------------------------------------------------------
 
     old_image = crop_white_border(
@@ -1004,7 +1176,7 @@ def analyze_api():
 
 
     # --------------------------------------------------------
-    # 3. 微調平移
+    # 3. 微調
     # --------------------------------------------------------
 
     aligned_new = refine_translation(
@@ -1014,7 +1186,7 @@ def analyze_api():
 
 
     # --------------------------------------------------------
-    # 4. 找局部真正差異
+    # 4. 找差異
     # --------------------------------------------------------
 
     mask, differences = find_differences(
@@ -1024,7 +1196,140 @@ def analyze_api():
 
 
     # --------------------------------------------------------
-    # 5. 左右同步畫圈
+    # 5. 載入品項圖庫
+    # --------------------------------------------------------
+
+    symbol_templates = load_symbol_templates()
+
+
+    # --------------------------------------------------------
+    # 6. 辨識每個差異是什麼品項
+    # --------------------------------------------------------
+
+    rows = []
+
+
+    image_h, image_w = old_image.shape[:2]
+
+
+    for index, diff in enumerate(
+        differences,
+        start=1
+    ):
+
+        x = diff["x"]
+        y = diff["y"]
+        w = diff["w"]
+        h = diff["h"]
+
+
+        # ----------------------------------------------------
+        # 擴大辨識範圍
+        #
+        # 差異框本身可能只抓到部分線條，
+        # 所以額外往外取一圈
+        # ----------------------------------------------------
+
+        recognize_padding = 25
+
+        x1 = max(
+            0,
+            x - recognize_padding
+        )
+
+        y1 = max(
+            0,
+            y - recognize_padding
+        )
+
+        x2 = min(
+            image_w,
+            x + w + recognize_padding
+        )
+
+        y2 = min(
+            image_h,
+            y + h + recognize_padding
+        )
+
+
+        old_roi = old_image[
+            y1:y2,
+            x1:x2
+        ]
+
+        new_roi = aligned_new[
+            y1:y2,
+            x1:x2
+        ]
+
+
+        # ----------------------------------------------------
+        # 原圖辨識
+        # ----------------------------------------------------
+
+        old_symbol_id, old_symbol_name, old_score = (
+            classify_symbol(
+                old_roi,
+                symbol_templates
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # 新圖辨識
+        # ----------------------------------------------------
+
+        new_symbol_id, new_symbol_name, new_score = (
+            classify_symbol(
+                new_roi,
+                symbol_templates
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # 取信心值較高的辨識結果
+        # ----------------------------------------------------
+
+        if new_score >= old_score:
+
+            symbol_id = new_symbol_id
+            symbol_name = new_symbol_name
+            confidence = new_score
+
+        else:
+
+            symbol_id = old_symbol_id
+            symbol_name = old_symbol_name
+            confidence = old_score
+
+
+        rows.append(
+            {
+                "id": index,
+
+                "x": x,
+                "y": y,
+
+                "width": w,
+                "height": h,
+
+                "symbol_id": (
+                    symbol_id
+                    if symbol_id is not None
+                    else ""
+                ),
+
+                "symbol_name": symbol_name,
+
+                "confidence": confidence
+            }
+        )
+
+
+    # --------------------------------------------------------
+    # 7. 畫圈
     # --------------------------------------------------------
 
     old_marked = draw_difference_boxes(
@@ -1038,31 +1343,11 @@ def analyze_api():
     )
 
 
-    # --------------------------------------------------------
-    # 6. 建立資料列
-    # --------------------------------------------------------
-
-    rows = []
-
-
-    for index, diff in enumerate(
-        differences,
-        start=1
-    ):
-
-        rows.append(
-            {
-                "id": index,
-                "x": diff["x"],
-                "y": diff["y"],
-                "width": diff["w"],
-                "height": diff["h"]
-            }
-        )
-
-
     return jsonify(
-        difference_count=len(differences),
+
+        difference_count=len(
+            differences
+        ),
 
         old_image=image_to_base64(
             old_marked
@@ -1070,11 +1355,6 @@ def analyze_api():
 
         new_image=image_to_base64(
             new_marked
-        ),
-
-        # 暫時保留欄位，避免舊版 index.html 報錯
-        mask=image_to_base64(
-            mask
         ),
 
         rows=rows
@@ -1095,6 +1375,7 @@ def export_csv():
         []
     )
 
+
     output = io.StringIO()
 
     writer = csv.writer(
@@ -1108,7 +1389,10 @@ def export_csv():
             "X",
             "Y",
             "寬度",
-            "高度"
+            "高度",
+            "品項編號",
+            "品項名稱",
+            "辨識信心值"
         ]
     )
 
@@ -1121,7 +1405,10 @@ def export_csv():
                 row.get("x", ""),
                 row.get("y", ""),
                 row.get("width", ""),
-                row.get("height", "")
+                row.get("height", ""),
+                row.get("symbol_id", ""),
+                row.get("symbol_name", ""),
+                row.get("confidence", "")
             ]
         )
 
