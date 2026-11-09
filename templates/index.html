@@ -25,7 +25,7 @@ button{border:0;border-radius:9px;padding:12px 23px;font-size:16px;font-weight:b
 button:disabled{opacity:.5;cursor:not-allowed}
 .primary{background:#16816f;color:white}
 .secondary{background:#435766;color:white}
-#status{text-align:center;margin-top:14px;font-weight:bold}
+#status{text-align:center;margin-top:14px;font-weight:bold;white-space:pre-wrap}
 .error{color:#c62828}
 .success{color:#087c55}
 #result{display:none}
@@ -131,7 +131,26 @@ const analyzeButton = document.getElementById("analyzeButton");
 const exportButton = document.getElementById("exportButton");
 const statusBox = document.getElementById("status");
 
+// =====================================================
+// 錯誤訊息處理
+// =====================================================
+
+function getErrorPreview(raw) {
+    return raw
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]*>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 200);
+}
+
+// =====================================================
+// 開始辨識及計算數量
+// =====================================================
+
 analyzeButton.addEventListener("click", async () => {
+
     if (!oldFile.files.length || !newFile.files.length) {
         statusBox.textContent = "請同時選擇原始圖與修改後圖";
         statusBox.className = "error";
@@ -144,23 +163,46 @@ analyzeButton.addEventListener("click", async () => {
 
     analyzeButton.disabled = true;
     exportButton.disabled = true;
+
     statusBox.textContent = "正在辨識 13 種設備符號並計算數量…";
     statusBox.className = "";
 
     try {
+
         const response = await fetch("/analyze", {
             method: "POST",
             body: formData
         });
 
-        const data = await response.json();
+        // 先讀取文字，不直接假設伺服器一定回傳 JSON
+        const raw = await response.text();
+
+        let data;
+
+        try {
+            data = JSON.parse(raw);
+        } catch (parseError) {
+
+            const preview = getErrorPreview(raw);
+
+            throw new Error(
+                `伺服器回傳非 JSON（HTTP ${response.status}）。\n` +
+                (preview || "請檢查 Render Logs。")
+            );
+        }
 
         if (!response.ok) {
-            throw new Error(data.error || "分析失敗");
+            throw new Error(
+                data.error || `伺服器錯誤（HTTP ${response.status}）`
+            );
         }
 
         if (!Array.isArray(data.rows)) {
-            throw new Error("後端回傳的品項數量資料格式不正確");
+            throw new Error("後端沒有正確回傳品項數量資料");
+        }
+
+        if (!data.old_image || !data.new_image) {
+            throw new Error("後端沒有回傳完整的圖面辨識結果");
         }
 
         document.getElementById("oldResult").src = data.old_image;
@@ -172,7 +214,8 @@ analyzeButton.addEventListener("click", async () => {
         renderSummary(latestRows);
 
         document.getElementById("result").style.display = "block";
-        exportButton.disabled = latestRows.length === 0;
+
+        exportButton.disabled = false;
 
         statusBox.textContent = "核對完成";
         statusBox.className = "success";
@@ -183,24 +226,37 @@ analyzeButton.addEventListener("click", async () => {
         });
 
     } catch (error) {
+
         statusBox.textContent = error.message;
         statusBox.className = "error";
+
+        exportButton.disabled = true;
+
     } finally {
+
         analyzeButton.disabled = false;
+
     }
 });
 
+// =====================================================
+// 顯示總計
+// =====================================================
+
 function renderSummary(rows) {
+
     let added = 0;
     let removed = 0;
     let changedTypes = 0;
 
     rows.forEach(row => {
+
         const diff = Number(row.difference) || 0;
 
         if (diff > 0) added += diff;
         if (diff < 0) removed += Math.abs(diff);
         if (diff !== 0) changedTypes++;
+
     });
 
     const summary = document.getElementById("summary");
@@ -214,62 +270,86 @@ function renderSummary(rows) {
     ];
 
     values.forEach(value => {
+
         const pill = document.createElement("span");
         pill.className = "pill";
         pill.textContent = value;
+
         summary.appendChild(pill);
+
     });
 }
 
+// =====================================================
+// 顯示品項數量表
+// =====================================================
+
 function renderRows(rows) {
+
     const tbody = document.getElementById("resultRows");
     tbody.replaceChildren();
 
     if (!rows.length) {
+
         const tr = document.createElement("tr");
         const td = document.createElement("td");
+
         td.colSpan = 5;
         td.textContent = "沒有品項資料";
+
         tr.appendChild(td);
         tbody.appendChild(tr);
+
         return;
     }
 
     rows.forEach(row => {
+
         const tr = document.createElement("tr");
 
-        // 圖案
+        // 品項圖案
         const imageCell = document.createElement("td");
+
         const symbolImage = document.createElement("img");
+
         symbolImage.className = "symbol-img";
         symbolImage.src = `/static/symbols/${row.id}.png`;
         symbolImage.alt = `品項 ${row.id}`;
+
         imageCell.appendChild(symbolImage);
 
         // 品項名稱
         const nameCell = document.createElement("td");
+
         nameCell.className = "name";
         nameCell.textContent = row.name || `品項 ${row.id}`;
 
         // 原始數量
         const oldCell = document.createElement("td");
+
         oldCell.className = "count";
         oldCell.textContent = Number(row.old_count) || 0;
 
         // 修改後數量
         const newCell = document.createElement("td");
+
         newCell.className = "count";
         newCell.textContent = Number(row.new_count) || 0;
 
         // 增減
         const diffCell = document.createElement("td");
+
         const diff = Number(row.difference) || 0;
 
         diffCell.textContent = diff > 0 ? `+${diff}` : diff;
 
-        if (diff > 0) diffCell.className = "plus";
-        else if (diff < 0) diffCell.className = "minus";
-        else diffCell.className = "zero";
+        if (diff > 0) {
+            diffCell.className = "plus";
+        } else if (diff < 0) {
+            diffCell.className = "minus";
+        } else {
+            diffCell.className = "zero";
+        }
 
         tr.append(
             imageCell,
@@ -280,16 +360,23 @@ function renderRows(rows) {
         );
 
         tbody.appendChild(tr);
+
     });
 }
 
+// =====================================================
+// CSV 匯出
+// =====================================================
+
 exportButton.addEventListener("click", async () => {
+
     if (!latestRows.length) {
         alert("目前沒有數量資料");
         return;
     }
 
     try {
+
         const response = await fetch("/export", {
             method: "POST",
             headers: {
@@ -301,13 +388,14 @@ exportButton.addEventListener("click", async () => {
         });
 
         if (!response.ok) {
-            throw new Error("CSV 匯出失敗");
+            throw new Error(`CSV 匯出失敗（HTTP ${response.status}）`);
         }
 
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
 
         const link = document.createElement("a");
+
         link.href = url;
         link.download = "DrawDiff設備數量統計.csv";
 
@@ -318,8 +406,11 @@ exportButton.addEventListener("click", async () => {
         URL.revokeObjectURL(url);
 
     } catch (error) {
+
         alert(error.message);
+
     }
+
 });
 </script>
 
