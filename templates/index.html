@@ -323,28 +323,6 @@
         }
 
 
-        .mask-panel {
-
-            margin-top: 30px;
-        }
-
-
-        .mask-panel img {
-
-            display: block;
-
-            width: 100%;
-
-            max-width: 100%;
-
-            margin-top: 12px;
-
-            background: black;
-
-            border: 1px solid #ccd9df;
-        }
-
-
         .table-wrap {
 
             overflow-x: auto;
@@ -604,22 +582,6 @@
         </div>
 
 
-        <!-- 差異遮罩 -->
-
-        <div class="mask-panel">
-
-            <div class="image-title">
-                差異遮罩
-            </div>
-
-            <img
-                id="maskResult"
-                alt="差異遮罩"
-            >
-
-        </div>
-
-
         <!-- 差異表 -->
 
         <div class="table-wrap">
@@ -807,12 +769,6 @@
                     "newResult"
                 ).src =
                     data.new_image;
-
-
-                document.getElementById(
-                    "maskResult"
-                ).src =
-                    data.mask;
 
 
                 document.getElementById(
