@@ -31,14 +31,21 @@ SYMBOL_NAMES = {
     12: "冷氣電源出口 220V(H:天花板)"
 }
 
+
 MATCH_THRESHOLD = 0.64
 
 SCALES = (
-    0.30, 0.35, 0.40, 0.45, 0.50,
-    0.55, 0.60, 0.65, 0.70, 0.75,
-    0.80, 0.90, 1.00, 1.10, 1.20,
-    1.35, 1.50, 1.70, 2.00
+    0.50,
+    0.65,
+    0.80,
+    0.95,
+    1.10,
+    1.30
 )
+
+MAX_PLAN_SIDE = 1200
+MAX_PEAKS_PER_SCALE = 20
+
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
@@ -290,10 +297,6 @@ def calculate_iou(a, b):
 # ============================================================
 
 def suppress_duplicates(matches, threshold=0.30):
-    """
-    不同縮放比例可能找到同一個符號多次。
-    只保留分數最高的辨識結果。
-    """
 
     matches = sorted(
         matches,
@@ -304,10 +307,33 @@ def suppress_duplicates(matches, threshold=0.30):
     kept = []
 
     for candidate in matches:
+
         duplicate = False
 
+        cx = candidate["x"] + candidate["w"] / 2
+        cy = candidate["y"] + candidate["h"] / 2
+
         for existing in kept:
-            if calculate_iou(candidate, existing) >= threshold:
+
+            ex = existing["x"] + existing["w"] / 2
+            ey = existing["y"] + existing["h"] / 2
+
+            max_size = max(
+                candidate["w"],
+                candidate["h"],
+                existing["w"],
+                existing["h"]
+            )
+
+            distance = (
+                (cx - ex) ** 2 +
+                (cy - ey) ** 2
+            ) ** 0.5
+
+            if (
+                calculate_iou(candidate, existing) >= threshold
+                or distance <= max_size * 0.30
+            ):
                 duplicate = True
                 break
 
@@ -317,20 +343,24 @@ def suppress_duplicates(matches, threshold=0.30):
     return kept
 
 
+
 # ============================================================
 # 多尺度設備符號辨識
 # ============================================================
 
 def detect_one_symbol(plan_gray, template):
+
     detections = []
 
     template_h, template_w = template.shape
 
-    # 圖例符號採用灰階相關係數比對
+    if template_h < 5 or template_w < 5:
+        return detections
+
     for scale in SCALES:
 
-        width = max(8, int(template_w * scale))
-        height = max(8, int(template_h * scale))
+        width = max(5, int(template_w * scale))
+        height = max(5, int(template_h * scale))
 
         if width >= plan_gray.shape[1]:
             continue
@@ -338,10 +368,16 @@ def detect_one_symbol(plan_gray, template):
         if height >= plan_gray.shape[0]:
             continue
 
+        interpolation = (
+            cv2.INTER_AREA
+            if scale < 1
+            else cv2.INTER_CUBIC
+        )
+
         resized = cv2.resize(
             template,
             (width, height),
-            interpolation=cv2.INTER_CUBIC
+            interpolation=interpolation
         )
 
         if np.std(resized) < 3:
@@ -353,47 +389,45 @@ def detect_one_symbol(plan_gray, template):
             cv2.TM_CCOEFF_NORMED
         )
 
-        # 以局部最大值找候選位置，
-        # 避免同一區域產生大量相鄰結果
-        kernel_w = max(3, int(width * 0.55))
-        kernel_h = max(3, int(height * 0.55))
+        for _ in range(MAX_PEAKS_PER_SCALE):
 
-        if kernel_w % 2 == 0:
-            kernel_w += 1
+            _, max_score, _, max_location = cv2.minMaxLoc(
+                response
+            )
 
-        if kernel_h % 2 == 0:
-            kernel_h += 1
+            if max_score < MATCH_THRESHOLD:
+                break
 
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_RECT,
-            (kernel_w, kernel_h)
-        )
+            x, y = max_location
 
-        local_max = cv2.dilate(response, kernel)
-
-        candidate_mask = (
-            (response >= MATCH_THRESHOLD)
-            & (response >= local_max - 0.00001)
-        )
-
-        ys, xs = np.where(candidate_mask)
-
-        if len(xs) > 500:
-            scores = response[ys, xs]
-            top_indices = np.argsort(scores)[-500:]
-            ys = ys[top_indices]
-            xs = xs[top_indices]
-
-        for y, x in zip(ys, xs):
             detections.append({
                 "x": int(x),
                 "y": int(y),
                 "w": int(width),
                 "h": int(height),
-                "score": float(response[y, x])
+                "score": float(max_score)
             })
 
+            half_w = max(3, width // 2)
+            half_h = max(3, height // 2)
+
+            x1 = max(0, x - half_w)
+            y1 = max(0, y - half_h)
+
+            x2 = min(
+                response.shape[1],
+                x + half_w + 1
+            )
+
+            y2 = min(
+                response.shape[0],
+                y + half_h + 1
+            )
+
+            response[y1:y2, x1:x2] = -1
+
     return suppress_duplicates(detections)
+
 
 
 # ============================================================
@@ -401,19 +435,61 @@ def detect_one_symbol(plan_gray, template):
 # ============================================================
 
 def detect_symbols(image, templates):
+
     gray = prepare_plan(image)
+
+    original_h, original_w = gray.shape
+
+    # 大圖先縮小，降低運算量
+    ratio = min(
+        1.0,
+        MAX_PLAN_SIDE / max(original_h, original_w)
+    )
+
+    if ratio < 1.0:
+
+        search_w = max(1, int(original_w * ratio))
+        search_h = max(1, int(original_h * ratio))
+
+        search_gray = cv2.resize(
+            gray,
+            (search_w, search_h),
+            interpolation=cv2.INTER_AREA
+        )
+
+    else:
+
+        search_gray = gray
+
+    scale_x = original_w / search_gray.shape[1]
+    scale_y = original_h / search_gray.shape[0]
 
     results = {}
 
     for symbol_id, template in templates.items():
+
         matches = detect_one_symbol(
-            gray,
+            search_gray,
             template
         )
 
-        results[symbol_id] = matches
+        # 還原成原始圖面的座標
+        restored = []
+
+        for match in matches:
+
+            restored.append({
+                "x": int(round(match["x"] * scale_x)),
+                "y": int(round(match["y"] * scale_y)),
+                "w": int(round(match["w"] * scale_x)),
+                "h": int(round(match["h"] * scale_y)),
+                "score": match["score"]
+            })
+
+        results[symbol_id] = restored
 
     return results
+
 
 
 # ============================================================
