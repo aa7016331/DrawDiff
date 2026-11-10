@@ -74,7 +74,7 @@ def read_upload(file):
 
             page = doc.load_page(0)
             pix = page.get_pixmap(
-                matrix=fitz.Matrix(2.0, 2.0),
+                matrix=fitz.Matrix(3.0, 3.0),
                 alpha=False
             )
             png_bytes = pix.tobytes("png")
@@ -985,8 +985,8 @@ def detect_symbols(image, templates):
                 )
 
                 if distance < max(
-                    7,
-                    min_size * 0.65
+                    3,
+                    min_size * 0.25
                 ):
 
                     duplicate = True
@@ -1023,10 +1023,6 @@ def detect_symbols(image, templates):
 # ============================================================
 
 def remove_cross_class_duplicates(detections):
-    """
-    如果不同品項模板在完全相同位置被辨識，
-    保留相似度較高的結果，避免重複計數。
-    """
 
     all_items = []
 
@@ -1036,6 +1032,7 @@ def remove_cross_class_duplicates(detections):
             current["symbol_id"] = symbol_id
             all_items.append(current)
 
+    # 相似度高的優先保留
     all_items.sort(
         key=lambda item: item["score"],
         reverse=True
@@ -1044,15 +1041,50 @@ def remove_cross_class_duplicates(detections):
     kept = []
 
     for candidate in all_items:
+
         duplicate = False
 
+        cx = candidate["x"] + candidate["w"] / 2
+        cy = candidate["y"] + candidate["h"] / 2
+
         for existing in kept:
-            same_area = calculate_iou(
+
+            ex = existing["x"] + existing["w"] / 2
+            ey = existing["y"] + existing["h"] / 2
+
+            # 兩個辨識框的中心距離
+            distance = (
+                (cx - ex) ** 2 +
+                (cy - ey) ** 2
+            ) ** 0.5
+
+            # 取兩個符號較小的尺寸
+            candidate_size = max(
+                candidate["w"],
+                candidate["h"]
+            )
+
+            existing_size = max(
+                existing["w"],
+                existing["h"]
+            )
+
+            min_size = min(
+                candidate_size,
+                existing_size
+            )
+
+            overlap = calculate_iou(
                 candidate,
                 existing
             )
 
-            if same_area >= 0.55:
+            # 必須同時符合高重疊及中心接近，
+            # 才判定為同一個設備的重複辨識
+            if (
+                overlap >= 0.35
+                and distance <= max(3, min_size * 0.25)
+            ):
                 duplicate = True
                 break
 
@@ -1065,6 +1097,7 @@ def remove_cross_class_duplicates(detections):
     }
 
     for item in kept:
+
         cleaned[item["symbol_id"]].append({
             "x": item["x"],
             "y": item["y"],
@@ -1074,6 +1107,7 @@ def remove_cross_class_duplicates(detections):
         })
 
     return cleaned
+
 
 
 # ============================================================
@@ -1195,78 +1229,103 @@ def align_images(old_image, new_image):
 # ============================================================
 
 def draw_detected_symbols(image, detections):
+
     result = image.copy()
 
+    image_h, image_w = result.shape[:2]
+
     for symbol_id, matches in detections.items():
+
         for match in matches:
-            x = match["x"]
-            y = match["y"]
-            w = match["w"]
-            h = match["h"]
+
+            x = int(match["x"])
+            y = int(match["y"])
+            w = int(match["w"])
+            h = int(match["h"])
+
+            # 確保框的尺寸有效
+            w = max(1, w)
+            h = max(1, h)
 
             center_x = x + w // 2
             center_y = y + h // 2
 
-            radius = max(
-                10,
-                int(max(w, h) * 0.60)
-            )
+            # 紅圈緊貼模板範圍，減少圈到鄰近設備
+            axis_x = max(8, w // 2 + 3)
+            axis_y = max(8, h // 2 + 3)
 
-            cv2.circle(
+            cv2.ellipse(
                 result,
                 (center_x, center_y),
-                radius,
+                (axis_x, axis_y),
+                0,
+                0,
+                360,
                 (0, 0, 255),
-                2
+                2,
+                cv2.LINE_AA
             )
 
+            # 設備編號
             label = str(symbol_id)
 
-            label_x = max(
-                12,
-                center_x - radius
+            text_size, _ = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.38,
+                1
             )
 
-            label_y = max(
-                12,
-                center_y - radius
+            badge_radius = max(
+                8,
+                text_size[0] // 2 + 4
+            )
+
+            # 編號放在辨識框左上方
+            label_x = x + badge_radius
+            label_y = y - 5
+
+            if label_y < badge_radius:
+                label_y = min(
+                    image_h - badge_radius,
+                    y + badge_radius + 5
+                )
+
+            label_x = min(
+                image_w - badge_radius,
+                max(badge_radius, label_x)
+            )
+
+            label_y = min(
+                image_h - badge_radius,
+                max(badge_radius, label_y)
             )
 
             cv2.circle(
                 result,
                 (label_x, label_y),
-                12,
+                badge_radius,
                 (0, 0, 255),
-                -1
+                -1,
+                cv2.LINE_AA
             )
 
-            text_size, _ = cv2.getTextSize(
-                label,
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.42,
-                1
-            )
-
-            text_x = int(
-                label_x - text_size[0] / 2
-            )
-
-            text_y = int(
-                label_y + text_size[1] / 2
-            )
+            text_x = label_x - text_size[0] // 2
+            text_y = label_y + text_size[1] // 2
 
             cv2.putText(
                 result,
                 label,
                 (text_x, text_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.42,
+                0.38,
                 (255, 255, 255),
                 1,
                 cv2.LINE_AA
             )
 
     return result
+
 
 
 # ============================================================
