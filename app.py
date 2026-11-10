@@ -496,7 +496,7 @@ def detect_symbols(image, templates):
         12: 0.55
     }
 
-        letter_ids = set()
+    letter_ids = set()
 
     letter_thresholds = {
         2: 0.35,
@@ -863,7 +863,7 @@ def detect_symbols(image, templates):
                             circle_score < 0.48
                             and score < threshold + 0.08
                         ):
-                           continue
+                            continue
 
                     else:
 
