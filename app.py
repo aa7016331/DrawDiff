@@ -5,1349 +5,490 @@ import io
 import base64
 from pathlib import Path
 
-from flask import Flask, render_template, request, jsonify, Response
 import cv2
-import numpy as np
 import fitz
+import numpy as np
+from flask import Flask, render_template_string, request, jsonify, Response
 
 BASE = Path(__file__).resolve().parent
-SYMBOL_DIR = BASE / "static" / "symbols"
-
-ALLOWED = {"png", "jpg", "jpeg", "bmp", "tif", "tiff", "pdf"}
-
-SYMBOL_NAMES = {
-    0: "住戶開關箱與弱電箱整合",
-    1: "馬桶專用插座 H:30cm",
-    2: "抽油煙機插座 H:天花板內",
-    3: "雙聯插座 H:30cm／電視牆 H:80cm",
-    4: "雙聯插座 H:110cm",
-    5: "洗碗機專用插座 H:45cm",
-    6: "微波烤箱專用插座 220V(H:55cm)",
-    7: "洗衣機用插座（防雨型）H:120cm",
-    8: "廚房橫櫃燈用電源出線口 H:170cm",
-    9: "暖風乾燥機電源出口 220V(H:天花)",
-    10: "雙聯紅色緊急插座（弱電箱、箱體內）",
-    11: "雙聯紅色緊急插座（冰箱／電視牆）",
-    12: "冷氣電源出口 220V(H:天花板)"
-}
-
-
-MATCH_THRESHOLD = 0.64
-
-SCALES = (
-    0.50,
-    0.65,
-    0.80,
-    0.95,
-    1.10,
-    1.30
-)
-
-MAX_PLAN_SIDE = 1200
-MAX_PEAKS_PER_SCALE = 20
-
+ALLOWED = {"pdf", "png", "jpg", "jpeg", "bmp", "tif", "tiff"}
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 60 * 1024 * 1024
+
+INDEX_HTML = r'''
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DrawDiff｜插座增減辨識</title>
+<style>
+:root{font-family:Arial,"Noto Sans TC",sans-serif;color:#152432;background:#f2f5f7}
+*{box-sizing:border-box}
+body{margin:0;padding:24px}
+main{max-width:1420px;margin:0 auto}
+header{margin:0 auto 20px;max-width:1420px}
+h1{font-size:25px;margin:0 0 6px}
+.sub{color:#627381;font-size:14px}
+.card{background:#fff;border:1px solid #d7e0e6;border-radius:14px;padding:22px;margin-bottom:18px;box-shadow:0 2px 8px rgba(20,40,55,.04)}
+h2{font-size:20px;margin:0 0 18px}
+.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.upload-box{border:1px dashed #aabac5;background:#fbfcfd;padding:16px;border-radius:10px}
+.upload-box strong{display:block;margin-bottom:8px}
+input[type=file]{display:block;width:100%;margin-top:8px}
+.page-row{display:flex;align-items:center;gap:10px;margin-top:12px;color:#546675;font-size:14px}
+input[type=number]{width:84px;padding:8px 9px;border:1px solid #cbd6dd;border-radius:8px;font-size:15px}
+.actions{display:flex;gap:12px;margin-top:18px;flex-wrap:wrap}
+button{border:0;border-radius:9px;padding:11px 18px;font-size:15px;cursor:pointer}
+.primary{background:#164f71;color:white}
+.secondary{background:#e9f0f4;color:#1b3a4e}
+button:disabled{opacity:.5;cursor:not-allowed}
+#status{margin-top:14px;min-height:20px;color:#5d6c77;font-size:14px}
+.error{color:#b42318!important}
+#result{display:none}
+.summary{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.pill{background:#edf3f6;border-radius:999px;padding:10px 15px;font-weight:600}
+.pill.plus{color:#13724e;background:#e8f5ee}
+.pill.minus{color:#a33c32;background:#faeeec}
+.main-result{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:10px 0 20px}
+.metric{border:1px solid #e0e7eb;border-radius:10px;padding:14px}
+.metric .label{font-size:13px;color:#687987}
+.metric .value{font-size:28px;font-weight:700;margin-top:4px}
+.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.image-panel{border:1px solid #d7e0e6;background:#fafcfd;border-radius:10px;padding:12px;min-width:0}
+.image-title{text-align:center;font-weight:700;margin-bottom:8px}
+.image-panel img{width:100%;height:auto;display:block;background:#fff;border:1px solid #e5eaee}
+.method{font-size:12px;color:#667784;margin-top:8px;line-height:1.45}
+table{border-collapse:collapse;width:100%;margin-top:20px}
+th,td{border-bottom:1px solid #e3e9ed;padding:12px;text-align:center}
+th{background:#edf2f5}
+td:first-child,th:first-child{text-align:left}
+.note{color:#687987;font-size:13px;margin-top:12px;line-height:1.5}
+@media(max-width:850px){body{padding:12px}.upload-grid,.compare-grid{grid-template-columns:1fr}.main-result{grid-template-columns:1fr 1fr}.card{padding:16px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>DrawDiff｜插座增減辨識</h1>
+  <div class="sub">上傳原始圖與設計師修改圖，自動清點電氣及弱電插座總數，計算增加與減少。</div>
+</header>
+<main>
+<section class="card">
+  <h2>上傳圖面</h2>
+  <form id="uploadForm">
+    <div class="upload-grid">
+      <div class="upload-box">
+        <strong>原始圖</strong>
+        <div class="sub">預設讀取 PDF 第 4 頁</div>
+        <input id="oldFile" name="old" type="file" accept=".pdf,.jpg,.jpeg,.png,.bmp,.tif,.tiff" required>
+        <div class="page-row">PDF 頁碼 <input id="oldPage" name="old_page" type="number" min="1" value="4"><span>（圖片檔會忽略）</span></div>
+      </div>
+      <div class="upload-box">
+        <strong>設計師修改圖</strong>
+        <div class="sub">預設讀取 PDF 第 3 頁</div>
+        <input id="newFile" name="new" type="file" accept=".pdf,.jpg,.jpeg,.png,.bmp,.tif,.tiff" required>
+        <div class="page-row">PDF 頁碼 <input id="newPage" name="new_page" type="number" min="1" value="3"><span>（圖片檔會忽略）</span></div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="analyzeButton" type="submit">開始辨識插座數量</button>
+      <button class="secondary" id="exportButton" type="button" disabled>匯出增減表 CSV</button>
+    </div>
+  </form>
+  <div id="status"></div>
+</section>
+
+<section class="card" id="result">
+  <h2>插座增減結果</h2>
+  <div class="summary" id="summary"></div>
+  <div class="main-result">
+    <div class="metric"><div class="label">原始圖插座總數</div><div class="value" id="oldCount">—</div></div>
+    <div class="metric"><div class="label">設計師修改圖插座總數</div><div class="value" id="newCount">—</div></div>
+    <div class="metric"><div class="label">淨增減</div><div class="value" id="netCount">—</div></div>
+  </div>
+  <div class="compare-grid">
+    <div class="image-panel">
+      <div class="image-title">原始圖（紅圈為辨識到的插座）</div>
+      <img id="oldResult" alt="原始圖插座辨識結果">
+      <div class="method" id="oldMethod"></div>
+    </div>
+    <div class="image-panel">
+      <div class="image-title">設計師修改圖（紅圈為辨識到的插座）</div>
+      <img id="newResult" alt="修改圖插座辨識結果">
+      <div class="method" id="newMethod"></div>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>設備項目</th><th>原圖數量</th><th>修改後數量</th><th>增加</th><th>減少</th><th>淨增減</th></tr></thead>
+    <tbody id="resultRows"></tbody>
+  </table>
+  <div class="note" id="resultNote"></div>
+</section>
+</main>
+<script>
+let latestRows=[];
+const form=document.getElementById('uploadForm');
+const statusEl=document.getElementById('status');
+const analyzeButton=document.getElementById('analyzeButton');
+const exportButton=document.getElementById('exportButton');
+
+form.addEventListener('submit',async (event)=>{
+  event.preventDefault();
+  const oldFile=document.getElementById('oldFile').files[0];
+  const newFile=document.getElementById('newFile').files[0];
+  if(!oldFile||!newFile){statusEl.textContent='請同時選擇原始圖及修改後圖。';statusEl.className='error';return;}
+  const payload=new FormData(form);
+  analyzeButton.disabled=true;
+  exportButton.disabled=true;
+  statusEl.textContent='正在讀取指定頁面並辨識插座，請勿關閉頁面。';
+  statusEl.className='';
+  try{
+    const response=await fetch('/analyze',{method:'POST',body:payload});
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||'辨識失敗');
+    document.getElementById('result').style.display='block';
+    document.getElementById('oldCount').textContent=data.old_count;
+    document.getElementById('newCount').textContent=data.new_count;
+    const net=data.difference;
+    document.getElementById('netCount').textContent=(net>0?'+':'')+net;
+    const summary=document.getElementById('summary');
+    summary.innerHTML='';
+    [
+      ['原圖 '+data.old_count+' 個',''],
+      ['修改後 '+data.new_count+' 個',''],
+      ['增加 '+data.added_count+' 個','plus'],
+      ['減少 '+data.removed_count+' 個','minus']
+    ].forEach(([label,cls])=>{const d=document.createElement('div');d.className='pill '+cls;d.textContent=label;summary.appendChild(d);});
+    document.getElementById('oldResult').src=data.old_image;
+    document.getElementById('newResult').src=data.new_image;
+    document.getElementById('oldMethod').textContent=data.old_method+'。'+data.old_note;
+    document.getElementById('newMethod').textContent=data.new_method+'。'+data.new_note;
+    const tr=document.createElement('tr');
+    const values=['全部插座（電氣＋弱電）',data.old_count,data.new_count,data.added_count,data.removed_count,(net>0?'+':'')+net];
+    values.forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td);});
+    const body=document.getElementById('resultRows');body.replaceChildren(tr);
+    latestRows=[{name:'全部插座（電氣＋弱電）',old_count:data.old_count,new_count:data.new_count,difference:net}];
+    document.getElementById('resultNote').textContent='統計目標為平面圖中的電氣插座與弱電插座。紅圈為自動辨識位置，請核對是否都落在插座符號上；若發現誤圈或漏圈，請勿直接將結果作為請款依據。';
+    exportButton.disabled=false;
+    statusEl.textContent='辨識完成。請檢查左右圖面的紅圈是否都落在插座符號上。';
+    statusEl.className='';
+    document.getElementById('result').scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(err){
+    statusEl.textContent=err.message;
+    statusEl.className='error';
+  }finally{
+    analyzeButton.disabled=false;
+  }
+});
+
+exportButton.addEventListener('click',async ()=>{
+  if(!latestRows.length)return;
+  try{
+    const r=await fetch('/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:latestRows})});
+    if(!r.ok)throw new Error('CSV 匯出失敗');
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download='DrawDiff插座增減統計.csv';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+  }catch(err){statusEl.textContent=err.message;statusEl.className='error';}
+});
+</script>
+</body>
+</html>
+'''
 
 
-# ============================================================
-# 圖片讀取
-# ============================================================
+PLAN_X0 = 0.11
+PLAN_X1 = 0.73
+PLAN_Y0 = 0.20
+PLAN_Y1 = 0.84
+RENDER_SCALE = 4.0
 
-def allowed(filename):
-    return (
-        "." in filename
-        and filename.rsplit(".", 1)[1].lower() in ALLOWED
+
+def _filename_ext(filename):
+    return Path(filename or "").suffix.lower().lstrip(".")
+
+
+def _jpeg_data_url(image_bgr, max_side=1900, quality=84):
+    h, w = image_bgr.shape[:2]
+    scale = min(1.0, max_side / max(h, w))
+    if scale < 1.0:
+        image_bgr = cv2.resize(
+            image_bgr,
+            (int(w * scale), int(h * scale)),
+            interpolation=cv2.INTER_AREA
+        )
+    ok, buffer = cv2.imencode(
+        ".jpg",
+        image_bgr,
+        [int(cv2.IMWRITE_JPEG_QUALITY), quality]
     )
-
-
-def read_upload(file):
-    ext = file.filename.rsplit(".", 1)[1].lower()
-    raw = file.read()
-
-    if ext == "pdf":
-        doc = fitz.open(stream=raw, filetype="pdf")
-        try:
-            if len(doc) == 0:
-                return None
-
-            page = doc.load_page(0)
-            pix = page.get_pixmap(
-                matrix=fitz.Matrix(3.0, 3.0),
-                alpha=False
-            )
-            png_bytes = pix.tobytes("png")
-        finally:
-            doc.close()
-
-        arr = np.frombuffer(png_bytes, np.uint8)
-        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
-
-    arr = np.frombuffer(raw, np.uint8)
-    return cv2.imdecode(arr, cv2.IMREAD_COLOR)
-
-
-def image_to_base64(image):
-    if image is None:
-        return None
-
-    ok, buffer = cv2.imencode(".png", image)
-
     if not ok:
-        return None
-
-    encoded = base64.b64encode(
-        buffer.tobytes()
-    ).decode("utf-8")
-
-    return "data:image/png;base64," + encoded
+        raise RuntimeError("結果圖片編碼失敗")
+    encoded = base64.b64encode(buffer.tobytes()).decode("ascii")
+    return "data:image/jpeg;base64," + encoded
 
 
-# ============================================================
-# 裁除圖面白邊
-# ============================================================
+def _mark_centers(image_bgr, centers):
+    """在插座符號中心畫紅圈。"""
+    result = image_bgr.copy()
+    h, w = result.shape[:2]
 
-def crop_white_border(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    mask = gray < 245
-
-    coords = np.column_stack(np.where(mask))
-
-    if len(coords) < 100:
-        return image
-
-    y, x, h, w = cv2.boundingRect(
-        coords.astype(np.int32)
-    )
-
-    padding = 15
-
-    x1 = max(0, x - padding)
-    y1 = max(0, y - padding)
-    x2 = min(image.shape[1], x + w + padding)
-    y2 = min(image.shape[0], y + h + padding)
-
-    return image[y1:y2, x1:x2]
-
-
-# ============================================================
-# 清理品項模板
-# ============================================================
-
-def clean_symbol_template(image):
-    """
-    清除圖例表格邊框，只留下真正的設備符號。
-
-    你的模板右側有垂直表格線，
-    這裡會自動辨識並裁除。
-    """
-
-    gray = image.copy()
-
-    if len(gray.shape) == 3:
-        gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
-
-    h, w = gray.shape
-
-    ink = gray < 225
-
-    # 找右側是否有貫穿整張模板的直線
-    right_start = int(w * 0.75)
-
-    for x in range(w - 1, right_start - 1, -1):
-        coverage = np.mean(ink[:, x])
-
-        if coverage > 0.70:
-            gray = gray[:, :max(1, x - 1)]
-            break
-
-    # 找上下表格橫線
-    h, w = gray.shape
-    ink = gray < 225
-
-    if np.mean(ink[0, :]) > 0.70:
-        gray = gray[1:, :]
-
-    h, w = gray.shape
-    ink = gray < 225
-
-    if np.mean(ink[-1, :]) > 0.70:
-        gray = gray[:-1, :]
-
-    # 再裁除符號以外的白色區域
-    mask = gray < 235
-    coords = np.column_stack(np.where(mask))
-
-    if len(coords) < 8:
-        return None
-
-    y, x, h, w = cv2.boundingRect(
-        coords.astype(np.int32)
-    )
-
-    padding = 2
-
-    x1 = max(0, x - padding)
-    y1 = max(0, y - padding)
-    x2 = min(gray.shape[1], x + w + padding)
-    y2 = min(gray.shape[0], y + h + padding)
-
-    result = gray[y1:y2, x1:x2]
-
-    if result.shape[0] < 8 or result.shape[1] < 8:
-        return None
+    for cx, cy, radius in centers:
+        x = int(round(cx))
+        y = int(round(cy))
+        r = max(10, int(round(radius)))
+        if not (0 <= x < w and 0 <= y < h):
+            continue
+        cv2.circle(
+            result,
+            (x, y),
+            r,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA
+        )
 
     return result
 
 
-# ============================================================
-# 載入 13 種品項圖案
-# ============================================================
+def _vector_socket_centers(page):
+    """
+    CAD 向量 PDF：定位平面圖中重複的插座外圈圓形路徑。
+    排除右側圖例表格、標題欄及頁面外框。
+    """
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        return []
 
-def load_symbol_templates():
-    templates = {}
-    missing = []
+    page_w = float(page.rect.width)
+    page_h = float(page.rect.height)
+    candidates = []
 
-    for symbol_id in range(13):
-        path = SYMBOL_DIR / f"{symbol_id}.png"
-
-        if not path.exists():
-            missing.append(f"{symbol_id}.png")
+    for drawing in drawings:
+        items = drawing.get("items", [])
+        if len(items) != 4 or not all(item[0] == "c" for item in items):
             continue
 
-        image = cv2.imread(
-            str(path),
-            cv2.IMREAD_GRAYSCALE
-        )
-
-        if image is None:
-            missing.append(f"{symbol_id}.png")
+        rect = drawing.get("rect")
+        if rect is None:
             continue
 
-        cleaned = clean_symbol_template(image)
+        visible_rect = rect * page.rotation_matrix
+        width = float(visible_rect.width)
+        height = float(visible_rect.height)
 
-        if cleaned is None:
-            missing.append(f"{symbol_id}.png")
+        if abs(width - height) > 0.25:
             continue
 
-        templates[symbol_id] = cleaned
+        diameter = (width + height) / 2.0
+        if not (10.0 <= diameter <= 18.0):
+            continue
 
-    return templates, missing
+        cx = (visible_rect.x0 + visible_rect.x1) / 2.0
+        cy = (visible_rect.y0 + visible_rect.y1) / 2.0
 
+        if not (PLAN_X0 * page_w <= cx <= PLAN_X1 * page_w):
+            continue
+        if not (PLAN_Y0 * page_h <= cy <= PLAN_Y1 * page_h):
+            continue
 
-# ============================================================
-# 圖面比對前處理
-# ============================================================
+        candidates.append((cx, cy, diameter))
 
-def prepare_plan(image):
-    gray = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2GRAY
-    )
+    if len(candidates) < 8:
+        return []
 
-    # 降低掃描和 JPEG 雜訊
-    gray = cv2.GaussianBlur(
-        gray,
-        (3, 3),
-        0
-    )
+    from collections import Counter
+    size_counts = Counter(round(item[2], 1) for item in candidates)
+    dominant_size, dominant_count = size_counts.most_common(1)[0]
 
-    return gray
+    if dominant_count < 8:
+        return []
 
+    selected = [
+        item for item in candidates
+        if abs(item[2] - dominant_size) <= 0.25
+    ]
 
-# ============================================================
-# 計算兩個框的重疊程度
-# ============================================================
-
-def calculate_iou(a, b):
-    ax1 = a["x"]
-    ay1 = a["y"]
-    ax2 = ax1 + a["w"]
-    ay2 = ay1 + a["h"]
-
-    bx1 = b["x"]
-    by1 = b["y"]
-    bx2 = bx1 + b["w"]
-    by2 = by1 + b["h"]
-
-    ix1 = max(ax1, bx1)
-    iy1 = max(ay1, by1)
-    ix2 = min(ax2, bx2)
-    iy2 = min(ay2, by2)
-
-    intersection = (
-        max(0, ix2 - ix1)
-        * max(0, iy2 - iy1)
-    )
-
-    area_a = a["w"] * a["h"]
-    area_b = b["w"] * b["h"]
-
-    union = area_a + area_b - intersection
-
-    if union <= 0:
-        return 0.0
-
-    return intersection / union
-
-
-# ============================================================
-# 單一品項的重複辨識排除
-# ============================================================
-
-def suppress_duplicates(matches, threshold=0.30):
-
-    matches = sorted(
-        matches,
-        key=lambda item: item["score"],
-        reverse=True
-    )
-
+    selected.sort(key=lambda item: item[2], reverse=True)
     kept = []
 
-    for candidate in matches:
-
-        duplicate = False
-
-        cx = candidate["x"] + candidate["w"] / 2
-        cy = candidate["y"] + candidate["h"] / 2
-
-        for existing in kept:
-
-            ex = existing["x"] + existing["w"] / 2
-            ey = existing["y"] + existing["h"] / 2
-
-            max_size = max(
-                candidate["w"],
-                candidate["h"],
-                existing["w"],
-                existing["h"]
-            )
-
-            distance = (
-                (cx - ex) ** 2 +
-                (cy - ey) ** 2
-            ) ** 0.5
-
-            if (
-                calculate_iou(candidate, existing) >= threshold
-                or distance <= max_size * 0.30
-            ):
-                duplicate = True
-                break
-
-        if not duplicate:
-            kept.append(candidate)
-
-    return kept
-
-
-
-# ============================================================
-# 多尺度設備符號辨識
-# ============================================================
-
-def detect_one_symbol(plan_gray, template):
-
-    detections = []
-
-    template_h, template_w = template.shape
-
-    if template_h < 5 or template_w < 5:
-        return detections
-
-    for scale in SCALES:
-
-        width = max(5, int(template_w * scale))
-        height = max(5, int(template_h * scale))
-
-        if width >= plan_gray.shape[1]:
-            continue
-
-        if height >= plan_gray.shape[0]:
-            continue
-
-        interpolation = (
-            cv2.INTER_AREA
-            if scale < 1
-            else cv2.INTER_CUBIC
-        )
-
-        resized = cv2.resize(
-            template,
-            (width, height),
-            interpolation=interpolation
-        )
-
-        if np.std(resized) < 3:
-            continue
-
-        response = cv2.matchTemplate(
-            plan_gray,
-            resized,
-            cv2.TM_CCOEFF_NORMED
-        )
-
-        for _ in range(MAX_PEAKS_PER_SCALE):
-
-            _, max_score, _, max_location = cv2.minMaxLoc(
-                response
-            )
-
-            if max_score < MATCH_THRESHOLD:
-                break
-
-            x, y = max_location
-
-            detections.append({
-                "x": int(x),
-                "y": int(y),
-                "w": int(width),
-                "h": int(height),
-                "score": float(max_score)
-            })
-
-            half_w = max(3, width // 2)
-            half_h = max(3, height // 2)
-
-            x1 = max(0, x - half_w)
-            y1 = max(0, y - half_h)
-
-            x2 = min(
-                response.shape[1],
-                x + half_w + 1
-            )
-
-            y2 = min(
-                response.shape[0],
-                y + half_h + 1
-            )
-
-            response[y1:y2, x1:x2] = -1
-
-    return suppress_duplicates(detections)
-
-
-
-# ============================================================
-# 13 種品項全部辨識
-# ============================================================
-
-
-def detect_symbols(image, templates):
-
-    gray = prepare_plan(image)
-
-    original_h, original_w = gray.shape
-
-    # 大圖才縮小，保留小型設備符號的細節
-    ratio = min(
-        1.0,
-        1600 / max(original_h, original_w)
-    )
-
-    if ratio < 1.0:
-        search_w = max(1, int(original_w * ratio))
-        search_h = max(1, int(original_h * ratio))
-
-        gray = cv2.resize(
-            gray,
-            (search_w, search_h),
-            interpolation=cv2.INTER_AREA
-        )
-
-    scale_x = original_w / gray.shape[1]
-    scale_y = original_h / gray.shape[0]
-
-    edge = cv2.Canny(gray, 45, 130)
-
-    # 依照實際圖面設定各品項的比對門檻
-    thresholds = {
-        0: 0.72,
-        1: 0.53,
-        2: 0.50,
-        3: 0.65,
-        4: 0.58,
-        5: 0.58,
-        6: 0.75,
-        7: 0.60,
-        8: 0.54,
-        9: 0.76,
-        10: 0.73,
-        11: 0.73,
-        12: 0.60
-    }
-
-    # 不同品項使用不同最小縮放比例
-    min_scales = {
-        0: 0.40,
-        1: 0.35,
-        2: 0.35,
-        3: 0.40,
-        4: 0.40,
-        5: 0.40,
-        6: 0.45,
-        7: 0.40,
-        8: 0.40,
-        9: 0.50,
-        10: 0.50,
-        11: 0.50,
-        12: 0.55
-    }
-
-    letter_ids = set()
-
-    letter_thresholds = {
-        2: 0.35,
-        4: 0.40,
-        5: 0.40,
-        6: 0.72,
-        7: 0.42,
-        9: 0.56,
-        10: 0.42,
-        11: 0.50,
-        12: 0.56
-    }
-
-    core_x_fraction = {
-        0: 0.50,
-        1: 0.50,
-        2: 0.40,
-        3: 0.50,
-        4: 0.42,
-        5: 0.40,
-        6: 0.40,
-        7: 0.40,
-        8: 0.50,
-        9: 0.40,
-        10: 0.40,
-        11: 0.40,
-        12: 0.40
-    }
-
-    # --------------------------------------------------------
-    # 旋轉模板
-    # --------------------------------------------------------
-
-    def rotate_image(img, angle):
-
-        if angle == 0:
-            return img
-
-        if angle == 90:
-            return cv2.rotate(
-                img,
-                cv2.ROTATE_90_CLOCKWISE
-            )
-
-        if angle == 180:
-            return cv2.rotate(
-                img,
-                cv2.ROTATE_180
-            )
-
-        return cv2.rotate(
-            img,
-            cv2.ROTATE_90_COUNTERCLOCKWISE
-        )
-
-    def rotate_point(x, y, w, h, angle):
-
-        if angle == 0:
-            return x, y
-
-        if angle == 90:
-            return h - 1 - y, x
-
-        if angle == 180:
-            return w - 1 - x, h - 1 - y
-
-        return y, w - 1 - x
-
-    # --------------------------------------------------------
-    # 驗證外圈是否有真正的圓形線條
-    # --------------------------------------------------------
-
-    def check_circle(edge_image, cx, cy, radius):
-
-        if radius < 3:
-            return 0.0
-
-        sectors = 36
-        matched = 0
-
-        for i in range(sectors):
-
-            angle = (
-                2 * np.pi * (i + 0.5) / sectors
-            )
-
-            found = False
-
-            for r in (
-                radius - 1.5,
-                radius,
-                radius + 1.5
-            ):
-
-                px = int(round(
-                    cx + r * np.cos(angle)
-                ))
-
-                py = int(round(
-                    cy + r * np.sin(angle)
-                ))
-
-                if (
-                    0 <= px < edge_image.shape[1]
-                    and 0 <= py < edge_image.shape[0]
-                    and edge_image[py, px] > 0
-                ):
-
-                    found = True
-                    break
-
-            if found:
-                matched += 1
-
-        return matched / sectors
-
-    # --------------------------------------------------------
-    # 驗證符號旁邊的英文字母
-    # --------------------------------------------------------
-
-    def check_letter(
-        original_template,
-        resized_template,
-        mask,
-        x,
-        y
-    ):
-
-        mask_resized = cv2.resize(
-            mask,
-            (
-                resized_template.shape[1],
-                resized_template.shape[0]
-            ),
-            interpolation=cv2.INTER_NEAREST
-        )
-
-        ys, xs = np.where(mask_resized > 0)
-
-        if len(xs) < 5:
-            return None
-
-        x1 = int(xs.min())
-        y1 = int(ys.min())
-        x2 = int(xs.max()) + 1
-        y2 = int(ys.max()) + 1
-
-        letter_template = resized_template[
-            y1:y2,
-            x1:x2
-        ]
-
-        if (
-            letter_template.size == 0
-            or np.std(letter_template) < 3
+    for cx, cy, diameter in selected:
+        if any(
+            (cx - x) ** 2 + (cy - y) ** 2 < 2.0 ** 2
+            for x, y, _ in kept
         ):
-            return None
+            continue
+        kept.append((cx, cy, diameter))
 
-        best_score = -1.0
-
-        for dy in (-2, -1, 0, 1, 2):
-            for dx in (-2, -1, 0, 1, 2):
-
-                tx = x + x1 + dx
-                ty = y + y1 + dy
-
-                if (
-                    tx < 0
-                    or ty < 0
-                    or tx + letter_template.shape[1] > gray.shape[1]
-                    or ty + letter_template.shape[0] > gray.shape[0]
-                ):
-                    continue
-
-                patch = gray[
-                    ty:ty + letter_template.shape[0],
-                    tx:tx + letter_template.shape[1]
-                ]
-
-                if np.std(patch) < 3:
-                    continue
-
-                score = cv2.matchTemplate(
-                    patch,
-                    letter_template,
-                    cv2.TM_CCOEFF_NORMED
-                )[0, 0]
-
-                best_score = max(
-                    best_score,
-                    float(score)
-                )
-
-        return (
-            best_score
-            if best_score >= 0
-            else None
+    return [
+        (
+            cx * RENDER_SCALE,
+            cy * RENDER_SCALE,
+            diameter * RENDER_SCALE * 0.58
         )
+        for cx, cy, diameter in kept
+    ]
 
-    # --------------------------------------------------------
-    # 開始辨識
-    # --------------------------------------------------------
 
-    results = {}
+def _raster_socket_centers(image_bgr):
+    """掃描 PDF：在平面圖區域偵測插座外圈。"""
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
 
-    default_scales = (
-        0.35, 0.42, 0.49, 0.56,
-        0.63, 0.70, 0.77, 0.84
+    x0 = int(w * PLAN_X0)
+    x1 = int(w * PLAN_X1)
+    y0 = int(h * PLAN_Y0)
+    y1 = int(h * PLAN_Y1)
+
+    roi = gray[y0:y1, x0:x1]
+    if roi.size == 0:
+        return []
+
+    small = cv2.resize(
+        roi,
+        None,
+        fx=0.5,
+        fy=0.5,
+        interpolation=cv2.INTER_AREA
+    )
+    blurred = cv2.GaussianBlur(small, (5, 5), 1.2)
+
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=27,
+        param1=80,
+        param2=39,
+        minRadius=10,
+        maxRadius=19
     )
 
-    # 第 3 類符號在圖面上的尺寸落在原本尺度間隙，
-    # 只對第 3 類加密搜尋，避免 13 類全部增加運算量。
-    fine_scales = tuple(
-        round(value, 2)
-        for value in np.arange(0.30, 1.06, 0.05)
-    )
-
-    for symbol_id, template in templates.items():
-
-        candidates = []
-
-        th0, tw0 = template.shape
-
-        threshold = thresholds.get(
-            symbol_id,
-            0.70
-        )
-
-        search_scales = (
-            fine_scales
-            if symbol_id == 3
-            else default_scales
-        )
-
-        # ----------------------------------------------------
-        # 四個方向
-        # ----------------------------------------------------
-
-        for angle in (
-            0,
-            90,
-            180,
-            270
-        ):
-
-            rotated = rotate_image(
-                template,
-                angle
-            )
-
-            rh, rw = rotated.shape
-
-            core_x, core_y = rotate_point(
-                tw0 * core_x_fraction[symbol_id],
-                th0 * 0.5,
-                tw0,
-                th0,
-                angle
-            )
-
-            # ------------------------------------------------
-            # 多尺寸搜尋
-            # ------------------------------------------------
-
-            for scale in search_scales:
-
-                if scale < min_scales[symbol_id]:
-                    continue
-
-                width = max(
-                    8,
-                    int(rw * scale)
-                )
-
-                height = max(
-                    8,
-                    int(rh * scale)
-                )
-
-                if (
-                    width >= gray.shape[1]
-                    or height >= gray.shape[0]
-                ):
-                    continue
-
-                resized = cv2.resize(
-                    rotated,
-                    (width, height),
-                    interpolation=cv2.INTER_AREA
-                )
-
-                response = cv2.matchTemplate(
-                    gray,
-                    resized,
-                    cv2.TM_CCOEFF_NORMED
-                )
-
-                # 只取局部最高相似度位置
-                kw = max(
-                    3,
-                    int(width * 0.60) // 2 * 2 + 1
-                )
-
-                kh = max(
-                    3,
-                    int(height * 0.60) // 2 * 2 + 1
-                )
-
-                local_max = cv2.dilate(
-                    response,
-                    cv2.getStructuringElement(
-                        cv2.MORPH_RECT,
-                        (kw, kh)
-                    )
-                )
-
-                ys, xs = np.where(
-                    (response >= threshold)
-                    &
-                    (response >= local_max - 0.000001)
-                )
-
-                # 限制每種尺寸的候選數量
-                if len(xs) > 15:
-
-                    scores = response[ys, xs]
-
-                    indices = np.argsort(
-                        scores
-                    )[-15:]
-
-                    ys = ys[indices]
-                    xs = xs[indices]
-
-                for yy, xx in zip(ys, xs):
-
-                    score = float(
-                        response[yy, xx]
-                    )
-
-                    # ----------------------------------------
-                    # 外圈驗證
-                    # ----------------------------------------
-
-                    if symbol_id != 0:
-
-                        cx = (
-                            xx
-                            + core_x * width / rw
-                        )
-
-                        cy = (
-                            yy
-                            + core_y * height / rh
-                        )
-
-                        radius = (
-                            min(th0, tw0)
-                            * 0.36
-                            * scale
-                        )
-
-                        circle_score = check_circle(
-                            edge,
-                            cx,
-                            cy,
-                            radius
-                        )
-
-                        if (
-                            circle_score < 0.48
-                            and score < threshold + 0.08
-                        ):
-                            continue
-
-                    else:
-
-                        circle_score = 1.0
-
-                    # ----------------------------------------
-                    # 字母驗證
-                    # ----------------------------------------
-
-                    letter_score = None
-
-                    if symbol_id in letter_ids:
-
-                        letter_mask = np.zeros(
-                            (th0, tw0),
-                            np.uint8
-                        )
-
-                        letter_mask[
-                            int(th0 * 0.38):,
-                            int(tw0 * 0.68):
-                        ] = 255
-
-                        rotated_mask = rotate_image(
-                            letter_mask,
-                            angle
-                        )
-
-                        letter_score = check_letter(
-                            rotated,
-                            resized,
-                            rotated_mask,
-                            int(xx),
-                            int(yy)
-                        )
-
-                        if (
-                            letter_score is None
-                            or letter_score < letter_thresholds[symbol_id]
-                        ):
-                            continue
-
-                    # ----------------------------------------
-                    # 綜合分數
-                    # ----------------------------------------
-
-                    combined_score = score
-
-                    if letter_score is not None:
-
-                        combined_score = (
-                            0.70 * score
-                            +
-                            0.30 * letter_score
-                        )
-
-                    combined_score = (
-                        0.90 * combined_score
-                        +
-                        0.10 * circle_score
-                    )
-
-                    candidates.append({
-                        "x": int(xx),
-                        "y": int(yy),
-                        "w": int(width),
-                        "h": int(height),
-                        "score": float(combined_score),
-                        "angle": angle
-                    })
-
-        # ----------------------------------------------------
-        # 同一品項重複結果排除
-        # ----------------------------------------------------
-
-        candidates.sort(
-            key=lambda item: item["score"],
-            reverse=True
-        )
-
-        kept = []
-
-        for candidate in candidates:
-
-            cx = (
-                candidate["x"]
-                + candidate["w"] / 2
-            )
-
-            cy = (
-                candidate["y"]
-                + candidate["h"] / 2
-            )
-
-            duplicate = False
-
-            for existing in kept:
-
-                ex = (
-                    existing["x"]
-                    + existing["w"] / 2
-                )
-
-                ey = (
-                    existing["y"]
-                    + existing["h"] / 2
-                )
-
-                distance = (
-                    (cx - ex) ** 2
-                    +
-                    (cy - ey) ** 2
-                ) ** 0.5
-
-                min_size = min(
-                    candidate["w"],
-                    candidate["h"],
-                    existing["w"],
-                    existing["h"]
-                )
-
-                if distance < max(
-                    3,
-                    min_size * 0.25
-                ):
-
-                    duplicate = True
-                    break
-
-            if not duplicate:
-                kept.append(candidate)
-
-        # ----------------------------------------------------
-        # 還原原始圖片座標
-        # ----------------------------------------------------
-
-        restored = []
-
-        for item in kept:
-
-            restored.append({
-                "x": int(round(item["x"] * scale_x)),
-                "y": int(round(item["y"] * scale_y)),
-                "w": int(round(item["w"] * scale_x)),
-                "h": int(round(item["h"] * scale_y)),
-                "score": item["score"]
-            })
-
-        results[symbol_id] = restored
+    if circles is None:
+        return []
+
+    results = []
+
+    for cx, cy, radius in np.round(circles[0]).astype(int):
+        results.append((
+            float(x0 + cx * 2),
+            float(y0 + cy * 2),
+            float(max(radius * 2, 12))
+        ))
 
     return results
 
 
+def _analyze_pdf(file_bytes, page_number):
+    try:
+        document = fitz.open(stream=file_bytes, filetype="pdf")
+    except Exception as exc:
+        raise ValueError(f"PDF 無法開啟：{exc}")
 
+    try:
+        page_index = page_number - 1
 
-# ============================================================
-# 同一位置跨品項重複辨識排除
-# ============================================================
-
-def remove_cross_class_duplicates(detections):
-
-    all_items = []
-
-    for symbol_id, matches in detections.items():
-        for item in matches:
-            current = dict(item)
-            current["symbol_id"] = symbol_id
-            all_items.append(current)
-
-    # 相似度高的優先保留
-    all_items.sort(
-        key=lambda item: item["score"],
-        reverse=True
-    )
-
-    kept = []
-
-    for candidate in all_items:
-
-        duplicate = False
-
-        cx = candidate["x"] + candidate["w"] / 2
-        cy = candidate["y"] + candidate["h"] / 2
-
-        for existing in kept:
-
-            ex = existing["x"] + existing["w"] / 2
-            ey = existing["y"] + existing["h"] / 2
-
-            # 兩個辨識框的中心距離
-            distance = (
-                (cx - ex) ** 2 +
-                (cy - ey) ** 2
-            ) ** 0.5
-
-            # 取兩個符號較小的尺寸
-            candidate_size = max(
-                candidate["w"],
-                candidate["h"]
+        if page_index < 0 or page_index >= len(document):
+            raise ValueError(
+                f"PDF 只有 {len(document)} 頁，指定的第 {page_number} 頁不存在。"
             )
 
-            existing_size = max(
-                existing["w"],
-                existing["h"]
+        page = document.load_page(page_index)
+
+        pix = page.get_pixmap(
+            matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE),
+            alpha=False,
+            colorspace=fitz.csRGB
+        )
+
+        rgb = np.frombuffer(
+            pix.samples,
+            dtype=np.uint8
+        ).reshape(pix.height, pix.width, pix.n)
+
+        image_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+        vector_centers = _vector_socket_centers(page)
+
+        if vector_centers:
+            centers = vector_centers
+            method = "PDF 向量符號定位"
+            note = "此頁保留向量圖元，以重複的插座外圈路徑計數。"
+        else:
+            centers = _raster_socket_centers(image_bgr)
+            method = "高解析度圖面圓形辨識"
+            note = "此頁為影像圖面，請核對紅圈是否都落在插座上。"
+
+        if not centers:
+            raise ValueError(
+                "這一頁沒有找到可辨識的插座符號。請確認頁碼。"
             )
 
-            min_size = min(
-                candidate_size,
-                existing_size
-            )
+        marked = _mark_centers(image_bgr, centers)
 
-            overlap = calculate_iou(
-                candidate,
-                existing
-            )
+        return {
+            "count": len(centers),
+            "image": _jpeg_data_url(marked),
+            "method": method,
+            "note": note
+        }
+    finally:
+        document.close()
 
-            # 必須同時符合高重疊及中心接近，
-            # 才判定為同一個設備的重複辨識
-            if (
-                overlap >= 0.35
-                and distance <= max(3, min_size * 0.25)
-            ):
-                duplicate = True
-                break
 
-        if not duplicate:
-            kept.append(candidate)
+def _analyze_image(file_bytes):
+    array = np.frombuffer(file_bytes, dtype=np.uint8)
+    image = cv2.imdecode(array, cv2.IMREAD_COLOR)
 
-    cleaned = {
-        symbol_id: []
-        for symbol_id in detections
+    if image is None:
+        raise ValueError("圖片無法讀取。")
+
+    h, w = image.shape[:2]
+
+    if max(h, w) < 1600:
+        raise ValueError(
+            "這張圖片解析度太低，無法可靠清點小型插座符號。請上傳原始 PDF。"
+        )
+
+    centers = _raster_socket_centers(image)
+
+    if not centers:
+        raise ValueError("圖片中沒有找到可辨識的插座符號。")
+
+    marked = _mark_centers(image, centers)
+
+    return {
+        "count": len(centers),
+        "image": _jpeg_data_url(marked),
+        "method": "高解析度圖面圓形辨識",
+        "note": "此頁為點陣圖面，請核對紅圈是否都落在插座上。"
     }
 
-    for item in kept:
 
-        cleaned[item["symbol_id"]].append({
-            "x": item["x"],
-            "y": item["y"],
-            "w": item["w"],
-            "h": item["h"],
-            "score": item["score"]
-        })
+def analyze_upload(upload, page_number):
+    filename = upload.filename or ""
+    ext = _filename_ext(filename)
 
-    return cleaned
+    if ext not in ALLOWED:
+        raise ValueError("只支援 PDF、PNG、JPG、JPEG、BMP、TIF、TIFF。")
 
+    raw = upload.read()
 
+    if not raw:
+        raise ValueError(f"檔案是空的：{filename}")
 
-# ============================================================
-# 自動對齊
-# ============================================================
+    if ext == "pdf":
+        return _analyze_pdf(raw, page_number)
 
-def align_images(old_image, new_image):
-    old_gray = prepare_plan(old_image)
-    new_gray = prepare_plan(new_image)
+    return _analyze_image(raw)
 
-    orb = cv2.ORB_create(
-        nfeatures=10000
-    )
-
-    kp1, des1 = orb.detectAndCompute(
-        old_gray,
-        None
-    )
-
-    kp2, des2 = orb.detectAndCompute(
-        new_gray,
-        None
-    )
-
-    if (
-        des1 is None
-        or des2 is None
-        or len(kp1) < 10
-        or len(kp2) < 10
-    ):
-        return cv2.resize(
-            new_image,
-            (old_image.shape[1], old_image.shape[0]),
-            interpolation=cv2.INTER_CUBIC
-        )
-
-    matcher = cv2.BFMatcher(
-        cv2.NORM_HAMMING,
-        crossCheck=False
-    )
-
-    raw_matches = matcher.knnMatch(
-        des2,
-        des1,
-        k=2
-    )
-
-    good = []
-
-    for pair in raw_matches:
-        if len(pair) < 2:
-            continue
-
-        m, n = pair
-
-        if m.distance < 0.72 * n.distance:
-            good.append(m)
-
-    if len(good) < 10:
-        return cv2.resize(
-            new_image,
-            (old_image.shape[1], old_image.shape[0]),
-            interpolation=cv2.INTER_CUBIC
-        )
-
-    good = sorted(
-        good,
-        key=lambda match: match.distance
-    )[:2500]
-
-    src = np.float32([
-        kp2[m.queryIdx].pt
-        for m in good
-    ]).reshape(-1, 1, 2)
-
-    dst = np.float32([
-        kp1[m.trainIdx].pt
-        for m in good
-    ]).reshape(-1, 1, 2)
-
-    matrix, inliers = cv2.estimateAffinePartial2D(
-        src,
-        dst,
-        method=cv2.RANSAC,
-        ransacReprojThreshold=3.0,
-        maxIters=10000,
-        confidence=0.995
-    )
-
-    if matrix is None:
-        return cv2.resize(
-            new_image,
-            (old_image.shape[1], old_image.shape[0]),
-            interpolation=cv2.INTER_CUBIC
-        )
-
-    if inliers is not None:
-        inlier_ratio = float(np.mean(inliers))
-
-        if inlier_ratio < 0.15:
-            return cv2.resize(
-                new_image,
-                (old_image.shape[1], old_image.shape[0]),
-                interpolation=cv2.INTER_CUBIC
-            )
-
-    return cv2.warpAffine(
-        new_image,
-        matrix,
-        (old_image.shape[1], old_image.shape[0]),
-        flags=cv2.INTER_CUBIC,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(255, 255, 255)
-    )
-
-
-# ============================================================
-# 在圖面上標記辨識出的設備
-# ============================================================
-
-def draw_detected_symbols(image, detections):
-
-    result = image.copy()
-
-    image_h, image_w = result.shape[:2]
-
-    for symbol_id, matches in detections.items():
-
-        for match in matches:
-
-            x = int(match["x"])
-            y = int(match["y"])
-            w = int(match["w"])
-            h = int(match["h"])
-
-            # 確保框的尺寸有效
-            w = max(1, w)
-            h = max(1, h)
-
-            center_x = x + w // 2
-            center_y = y + h // 2
-
-            # 紅圈緊貼模板範圍，減少圈到鄰近設備
-            axis_x = max(8, w // 2 + 3)
-            axis_y = max(8, h // 2 + 3)
-
-            cv2.ellipse(
-                result,
-                (center_x, center_y),
-                (axis_x, axis_y),
-                0,
-                0,
-                360,
-                (0, 0, 255),
-                2,
-                cv2.LINE_AA
-            )
-
-            # 設備編號
-            label = str(symbol_id)
-
-            text_size, _ = cv2.getTextSize(
-                label,
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.38,
-                1
-            )
-
-            badge_radius = max(
-                8,
-                text_size[0] // 2 + 4
-            )
-
-            # 編號放在辨識框左上方
-            label_x = x + badge_radius
-            label_y = y - 5
-
-            if label_y < badge_radius:
-                label_y = min(
-                    image_h - badge_radius,
-                    y + badge_radius + 5
-                )
-
-            label_x = min(
-                image_w - badge_radius,
-                max(badge_radius, label_x)
-            )
-
-            label_y = min(
-                image_h - badge_radius,
-                max(badge_radius, label_y)
-            )
-
-            cv2.circle(
-                result,
-                (label_x, label_y),
-                badge_radius,
-                (0, 0, 255),
-                -1,
-                cv2.LINE_AA
-            )
-
-            text_x = label_x - text_size[0] // 2
-            text_y = label_y + text_size[1] // 2
-
-            cv2.putText(
-                result,
-                label,
-                (text_x, text_y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.38,
-                (255, 255, 255),
-                1,
-                cv2.LINE_AA
-            )
-
-    return result
-
-
-
-# ============================================================
-# 首頁
-# ============================================================
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    return render_template_string(INDEX_HTML)
 
-
-# ============================================================
-# 數量辨識 API
-# ============================================================
 
 @app.post("/analyze")
 def analyze_api():
@@ -1356,150 +497,81 @@ def analyze_api():
 
     if not old_file or not new_file:
         return jsonify(
-            error="請同時上傳原始圖與修改後圖"
-        ), 400
-
-    if (
-        not allowed(old_file.filename)
-        or not allowed(new_file.filename)
-    ):
-        return jsonify(
-            error="僅支援 PNG、JPG、JPEG、BMP、TIF、TIFF、PDF"
+            error="請同時選擇原始圖 PDF 與設計師修改圖 PDF。"
         ), 400
 
     try:
-        old_image = read_upload(old_file)
-        new_image = read_upload(new_file)
-    except Exception as error:
-        return jsonify(
-            error=f"圖片讀取失敗：{str(error)}"
-        ), 400
+        old_page = int(request.form.get("old_page", "4"))
+        new_page = int(request.form.get("new_page", "3"))
 
-    if old_image is None or new_image is None:
-        return jsonify(
-            error="圖片無法讀取"
-        ), 400
+        if old_page < 1 or new_page < 1:
+            raise ValueError("PDF 頁碼必須從 1 開始。")
 
-    old_image = crop_white_border(old_image)
-    new_image = crop_white_border(new_image)
+        old_result = analyze_upload(old_file, old_page)
+        new_result = analyze_upload(new_file, new_page)
 
-    # 1. 先對齊
-    aligned_new = align_images(
-        old_image,
-        new_image
-    )
-
-    # 2. 讀取 13 張品項圖案
-    templates, missing = load_symbol_templates()
-
-    if missing:
-        return jsonify(
-            error="以下品項圖案不存在或無法讀取：" + "、".join(missing)
-        ), 500
-
-    # 3. 分別辨識原圖和修改後圖
-    old_detections = detect_symbols(
-        old_image,
-        templates
-    )
-
-    new_detections = detect_symbols(
-        aligned_new,
-        templates
-    )
-
-    # 4. 排除跨品項重複
-    old_detections = remove_cross_class_duplicates(
-        old_detections
-    )
-
-    new_detections = remove_cross_class_duplicates(
-        new_detections
-    )
-
-    # 5. 統計每種設備數量
-    rows = []
-
-    added_total = 0
-    removed_total = 0
-    changed_types = 0
-
-    for symbol_id in range(13):
-        old_count = len(
-            old_detections.get(symbol_id, [])
-        )
-
-        new_count = len(
-            new_detections.get(symbol_id, [])
-        )
-
+        old_count = old_result["count"]
+        new_count = new_result["count"]
         difference = new_count - old_count
 
-        if difference > 0:
-            added_total += difference
+        added = max(difference, 0)
+        removed = max(-difference, 0)
 
-        elif difference < 0:
-            removed_total += abs(difference)
+        return jsonify(
+            old_count=old_count,
+            new_count=new_count,
+            difference=difference,
+            added_count=added,
+            removed_count=removed,
+            old_image=old_result["image"],
+            new_image=new_result["image"],
+            old_method=old_result["method"],
+            new_method=new_result["method"],
+            old_note=old_result["note"],
+            new_note=new_result["note"],
+            rows=[{
+                "name": "全部插座（電氣＋弱電）",
+                "old_count": old_count,
+                "new_count": new_count,
+                "difference": difference
+            }]
+        )
 
-        if difference != 0:
-            changed_types += 1
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
 
-        rows.append({
-            "id": symbol_id,
-            "name": SYMBOL_NAMES[symbol_id],
-            "old_count": old_count,
-            "new_count": new_count,
-            "difference": difference
-        })
+    except Exception as exc:
+        app.logger.exception("socket count failed")
+        return jsonify(error=f"辨識失敗：{exc}"), 500
 
-    # 6. 圖面標記
-    old_marked = draw_detected_symbols(
-        old_image,
-        old_detections
-    )
-
-    new_marked = draw_detected_symbols(
-        aligned_new,
-        new_detections
-    )
-
-    return jsonify(
-        difference_count=changed_types,
-        added_count=added_total,
-        removed_count=removed_total,
-        old_image=image_to_base64(old_marked),
-        new_image=image_to_base64(new_marked),
-        rows=rows
-    )
-
-
-# ============================================================
-# CSV 匯出
-# ============================================================
 
 @app.post("/export")
 def export_csv():
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     rows = data.get("rows", [])
 
     output = io.StringIO()
     writer = csv.writer(output)
 
     writer.writerow([
-        "品項編號",
-        "品項名稱",
-        "原始圖數量",
-        "修改後圖數量",
-        "增減"
+        "設備項目",
+        "原圖數量",
+        "修改後數量",
+        "增加",
+        "減少",
+        "淨增減"
     ])
 
     for row in rows:
+        diff = int(row.get("difference", 0))
+
         writer.writerow([
-            row.get("id", ""),
-            row.get("name", ""),
+            row.get("name", "全部插座"),
             row.get("old_count", 0),
             row.get("new_count", 0),
-            row.get("difference", 0)
+            max(diff, 0),
+            max(-diff, 0),
+            diff
         ])
 
     return Response(
@@ -1507,19 +579,11 @@ def export_csv():
         mimetype="text/csv; charset=utf-8",
         headers={
             "Content-Disposition":
-                "attachment; filename=DrawDiff設備數量.csv"
+                "attachment; filename=DrawDiff插座增減統計.csv"
         }
     )
 
 
-# ============================================================
-# 啟動
-# ============================================================
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+    app.run(host="0.0.0.0", port=port)
