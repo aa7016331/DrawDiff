@@ -702,15 +702,16 @@ def detect_symbols(image, templates):
 
     results = {}
 
-    scales = (
-        0.35,
-        0.42,
-        0.49,
-        0.56,
-        0.63,
-        0.70,
-        0.77,
-        0.84
+    default_scales = (
+        0.35, 0.42, 0.49, 0.56,
+        0.63, 0.70, 0.77, 0.84
+    )
+
+    # 第 3 類符號在圖面上的尺寸落在原本尺度間隙，
+    # 只對第 3 類加密搜尋，避免 13 類全部增加運算量。
+    fine_scales = tuple(
+        round(value, 2)
+        for value in np.arange(0.30, 1.06, 0.05)
     )
 
     for symbol_id, template in templates.items():
@@ -722,6 +723,12 @@ def detect_symbols(image, templates):
         threshold = thresholds.get(
             symbol_id,
             0.70
+        )
+
+        search_scales = (
+            fine_scales
+            if symbol_id == 3
+            else default_scales
         )
 
         # ----------------------------------------------------
@@ -754,7 +761,7 @@ def detect_symbols(image, templates):
             # 多尺寸搜尋
             # ------------------------------------------------
 
-            for scale in scales:
+            for scale in search_scales:
 
                 if scale < min_scales[symbol_id]:
                     continue
