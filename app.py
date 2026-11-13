@@ -1,1923 +1,589 @@
+
 import os
+import csv
+import io
 import base64
 from pathlib import Path
 
 import cv2
 import fitz
 import numpy as np
+from flask import Flask, render_template_string, request, jsonify, Response
 
-from flask import Flask, request, render_template_string
-
-
-# ============================================================
-# 基本設定
-# ============================================================
-
-BASE_DIR = Path(__file__).resolve().parent
-
-SYMBOL_DIR = BASE_DIR / "static" / "symbols"
-
-ALLOWED_EXTENSIONS = {
-    "jpg",
-    "jpeg",
-    "png",
-    "pdf"
-}
+BASE = Path(__file__).resolve().parent
+ALLOWED = {"pdf", "png", "jpg", "jpeg", "bmp", "tif", "tiff"}
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 60 * 1024 * 1024
 
-
-# ============================================================
-# 網頁 HTML
-# ============================================================
-
-PAGE_HTML = """
+INDEX_HTML = r'''
 <!DOCTYPE html>
 <html lang="zh-Hant">
-
 <head>
-
-    <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1"
-    >
-
-    <title>DrawDiff 圖面設備比對</title>
-
-    <style>
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            padding: 30px;
-
-            font-family:
-                Arial,
-                "Microsoft JhengHei",
-                sans-serif;
-
-            background: #f3f6f8;
-            color: #1f2933;
-        }
-
-        .container {
-            max-width: 1500px;
-            margin: auto;
-        }
-
-        h1 {
-            margin-bottom: 10px;
-        }
-
-        .card {
-            background: white;
-            border: 1px solid #d9e2e8;
-            border-radius: 14px;
-            padding: 24px;
-            margin-bottom: 24px;
-        }
-
-        .upload-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-
-        .upload-box {
-            border: 2px dashed #b9c9d3;
-            border-radius: 12px;
-            padding: 25px;
-            text-align: center;
-            background: #fafcfd;
-        }
-
-        .upload-box h3 {
-            margin-top: 0;
-        }
-
-        input[type=file] {
-            max-width: 100%;
-            margin-bottom: 15px;
-        }
-
-        .page-select {
-            margin-top: 12px;
-            padding: 14px;
-            background: #edf4f6;
-            border-radius: 8px;
-            text-align: left;
-        }
-
-        .page-select label {
-            display: block;
-            font-weight: bold;
-            margin-bottom: 8px;
-        }
-
-        input[type=number] {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #b9c9d3;
-            border-radius: 6px;
-            font-size: 16px;
-        }
-
-        .page-help {
-            color: #60727c;
-            font-size: 13px;
-            margin-top: 8px;
-            line-height: 1.5;
-        }
-
-        .button-row {
-            text-align: center;
-            margin-top: 20px;
-        }
-
-        button {
-            border: 0;
-            border-radius: 8px;
-            padding: 12px 24px;
-            font-size: 16px;
-            cursor: pointer;
-            background: #16857a;
-            color: white;
-        }
-
-        button:hover {
-            background: #116d64;
-        }
-
-        .summary {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-
-        .badge {
-            background: #edf4f6;
-            padding: 10px 18px;
-            border-radius: 30px;
-            font-weight: bold;
-        }
-
-        .add {
-            color: #0b7a3d;
-        }
-
-        .remove {
-            color: #c62828;
-        }
-
-        .image-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-
-        .image-card {
-            border: 1px solid #cfdce3;
-            border-radius: 10px;
-            padding: 12px;
-            text-align: center;
-            overflow: hidden;
-        }
-
-        .image-card h3 {
-            margin-top: 0;
-        }
-
-        .image-card img {
-            width: 100%;
-            max-height: 900px;
-            object-fit: contain;
-            border: 1px solid #dbe4e8;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 25px;
-        }
-
-        th {
-            background: #e8f0f3;
-        }
-
-        th,
-        td {
-            padding: 12px;
-            border-bottom: 1px solid #dbe4e8;
-            text-align: center;
-        }
-
-        .error {
-            padding: 15px;
-            border-radius: 8px;
-            background: #ffe8e8;
-            color: #b71c1c;
-            margin-bottom: 20px;
-        }
-
-        .small {
-            color: #60727c;
-            font-size: 14px;
-            margin-top: 8px;
-            line-height: 1.6;
-        }
-
-        @media (max-width: 900px) {
-
-            body {
-                padding: 12px;
-            }
-
-            .upload-grid,
-            .image-grid {
-                grid-template-columns: 1fr;
-            }
-
-        }
-
-    </style>
-
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DrawDiff｜插座增減辨識</title>
+<style>
+:root{font-family:Arial,"Noto Sans TC",sans-serif;color:#152432;background:#f2f5f7}
+*{box-sizing:border-box}
+body{margin:0;padding:24px}
+main{max-width:1420px;margin:0 auto}
+header{margin:0 auto 20px;max-width:1420px}
+h1{font-size:25px;margin:0 0 6px}
+.sub{color:#627381;font-size:14px}
+.card{background:#fff;border:1px solid #d7e0e6;border-radius:14px;padding:22px;margin-bottom:18px;box-shadow:0 2px 8px rgba(20,40,55,.04)}
+h2{font-size:20px;margin:0 0 18px}
+.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.upload-box{border:1px dashed #aabac5;background:#fbfcfd;padding:16px;border-radius:10px}
+.upload-box strong{display:block;margin-bottom:8px}
+input[type=file]{display:block;width:100%;margin-top:8px}
+.page-row{display:flex;align-items:center;gap:10px;margin-top:12px;color:#546675;font-size:14px}
+input[type=number]{width:84px;padding:8px 9px;border:1px solid #cbd6dd;border-radius:8px;font-size:15px}
+.actions{display:flex;gap:12px;margin-top:18px;flex-wrap:wrap}
+button{border:0;border-radius:9px;padding:11px 18px;font-size:15px;cursor:pointer}
+.primary{background:#164f71;color:white}
+.secondary{background:#e9f0f4;color:#1b3a4e}
+button:disabled{opacity:.5;cursor:not-allowed}
+#status{margin-top:14px;min-height:20px;color:#5d6c77;font-size:14px}
+.error{color:#b42318!important}
+#result{display:none}
+.summary{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.pill{background:#edf3f6;border-radius:999px;padding:10px 15px;font-weight:600}
+.pill.plus{color:#13724e;background:#e8f5ee}
+.pill.minus{color:#a33c32;background:#faeeec}
+.main-result{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:10px 0 20px}
+.metric{border:1px solid #e0e7eb;border-radius:10px;padding:14px}
+.metric .label{font-size:13px;color:#687987}
+.metric .value{font-size:28px;font-weight:700;margin-top:4px}
+.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.image-panel{border:1px solid #d7e0e6;background:#fafcfd;border-radius:10px;padding:12px;min-width:0}
+.image-title{text-align:center;font-weight:700;margin-bottom:8px}
+.image-panel img{width:100%;height:auto;display:block;background:#fff;border:1px solid #e5eaee}
+.method{font-size:12px;color:#667784;margin-top:8px;line-height:1.45}
+table{border-collapse:collapse;width:100%;margin-top:20px}
+th,td{border-bottom:1px solid #e3e9ed;padding:12px;text-align:center}
+th{background:#edf2f5}
+td:first-child,th:first-child{text-align:left}
+.note{color:#687987;font-size:13px;margin-top:12px;line-height:1.5}
+@media(max-width:850px){body{padding:12px}.upload-grid,.compare-grid{grid-template-columns:1fr}.main-result{grid-template-columns:1fr 1fr}.card{padding:16px}}
+</style>
 </head>
-
-
 <body>
-
-<div class="container">
-
-    <h1>DrawDiff 圖面設備辨識</h1>
-
-
-    <div class="card">
-
-        <form
-            method="POST"
-            action="/analyze"
-            enctype="multipart/form-data"
-        >
-
-            <div class="upload-grid">
-
-
-                <!-- ====================================== -->
-                <!-- 原始圖 -->
-                <!-- ====================================== -->
-
-                <div class="upload-box">
-
-                    <h3>原始圖</h3>
-
-                    <p>JPG / PNG / PDF</p>
-
-                    <input
-                        type="file"
-                        name="original_file"
-                        accept=".jpg,.jpeg,.png,.pdf"
-                        required
-                    >
-
-
-                    <div class="page-select">
-
-                        <label for="original_page">
-                            原始圖 PDF 頁數
-                        </label>
-
-                        <input
-                            type="number"
-                            id="original_page"
-                            name="original_page"
-                            value="1"
-                            min="1"
-                        >
-
-                        <div class="page-help">
-
-                            如果上傳的是 PDF，
-                            請輸入要辨識的頁數。
-
-                            <br>
-
-                            例如：第 4 頁請輸入 4。
-
-                            <br>
-
-                            JPG / PNG 可維持 1。
-
-                        </div>
-
-                    </div>
-
-                </div>
-
-
-                <!-- ====================================== -->
-                <!-- 修改後圖 -->
-                <!-- ====================================== -->
-
-                <div class="upload-box">
-
-                    <h3>修改後圖</h3>
-
-                    <p>JPG / PNG / PDF</p>
-
-                    <input
-                        type="file"
-                        name="modified_file"
-                        accept=".jpg,.jpeg,.png,.pdf"
-                        required
-                    >
-
-
-                    <div class="page-select">
-
-                        <label for="modified_page">
-                            修改後圖 PDF 頁數
-                        </label>
-
-                        <input
-                            type="number"
-                            id="modified_page"
-                            name="modified_page"
-                            value="1"
-                            min="1"
-                        >
-
-                        <div class="page-help">
-
-                            如果上傳的是 PDF，
-                            請輸入要辨識的頁數。
-
-                            <br>
-
-                            例如：第 3 頁請輸入 3。
-
-                            <br>
-
-                            JPG / PNG 可維持 1。
-
-                        </div>
-
-                    </div>
-
-                </div>
-
-
-            </div>
-
-
-            <div class="button-row">
-
-                <button type="submit">
-                    開始自動辨識
-                </button>
-
-            </div>
-
-        </form>
-
+<header>
+  <h1>DrawDiff｜插座增減辨識</h1>
+  <div class="sub">上傳原始圖與設計師修改圖，自動清點電氣及弱電插座總數，計算增加與減少。</div>
+</header>
+<main>
+<section class="card">
+  <h2>上傳圖面</h2>
+  <form id="uploadForm">
+    <div class="upload-grid">
+      <div class="upload-box">
+        <strong>原始圖</strong>
+        <div class="sub">預設讀取 PDF 第 4 頁</div>
+        <input id="oldFile" name="old" type="file" accept=".pdf,.jpg,.jpeg,.png,.bmp,.tif,.tiff" required>
+        <div class="page-row">PDF 頁碼 <input id="oldPage" name="old_page" type="number" min="1" value="4"><span>（圖片檔會忽略）</span></div>
+      </div>
+      <div class="upload-box">
+        <strong>設計師修改圖</strong>
+        <div class="sub">預設讀取 PDF 第 3 頁</div>
+        <input id="newFile" name="new" type="file" accept=".pdf,.jpg,.jpeg,.png,.bmp,.tif,.tiff" required>
+        <div class="page-row">PDF 頁碼 <input id="newPage" name="new_page" type="number" min="1" value="3"><span>（圖片檔會忽略）</span></div>
+      </div>
     </div>
-
-
-    {% if error %}
-
-        <div class="error">
-            {{ error }}
-        </div>
-
-    {% endif %}
-
-
-    {% if result %}
-
-        <div class="card">
-
-            <h2>插座增減結果</h2>
-
-
-            <div class="summary">
-
-                <div class="badge">
-                    原圖 {{ result.original_total }} 個
-                </div>
-
-                <div class="badge">
-                    修改後 {{ result.modified_total }} 個
-                </div>
-
-                <div class="badge add">
-                    增加 {{ result.added }} 個
-                </div>
-
-                <div class="badge remove">
-                    減少 {{ result.removed }} 個
-                </div>
-
-            </div>
-
-
-            <div class="image-grid">
-
-
-                <!-- 原圖 -->
-
-                <div class="image-card">
-
-                    <h3>
-                        原始圖
-                        （紅圈為辨識到的設備符號）
-                    </h3>
-
-                    <img
-                        src="data:image/png;base64,{{ result.original_image }}"
-                    >
-
-                </div>
-
-
-                <!-- 修改圖 -->
-
-                <div class="image-card">
-
-                    <h3>
-                        修改後圖
-                        （紅圈為辨識到的設備符號）
-                    </h3>
-
-                    <img
-                        src="data:image/png;base64,{{ result.modified_image }}"
-                    >
-
-                </div>
-
-
-            </div>
-
-
-            <table>
-
-                <thead>
-
-                    <tr>
-
-                        <th>
-                            設備項目
-                        </th>
-
-                        <th>
-                            原圖數量
-                        </th>
-
-                        <th>
-                            修改後數量
-                        </th>
-
-                        <th>
-                            增加
-                        </th>
-
-                        <th>
-                            減少
-                        </th>
-
-                        <th>
-                            淨增減
-                        </th>
-
-                    </tr>
-
-                </thead>
-
-
-                <tbody>
-
-                    <tr>
-
-                        <td>
-                            全部插座／設備符號
-                        </td>
-
-                        <td>
-                            {{ result.original_total }}
-                        </td>
-
-                        <td>
-                            {{ result.modified_total }}
-                        </td>
-
-                        <td class="add">
-                            {{ result.added }}
-                        </td>
-
-                        <td class="remove">
-                            {{ result.removed }}
-                        </td>
-
-                        <td>
-                            {{ result.net_change }}
-                        </td>
-
-                    </tr>
-
-                </tbody>
-
-            </table>
-
-
-            <p class="small">
-
-                原圖與修改後圖會各自獨立辨識。
-
-                <br>
-
-                PDF 會依照你輸入的頁數讀取指定頁面。
-
-                <br>
-
-                本次辨識只計算圖面上的設備符號，
-                不讀取右側或旁邊的統計表格。
-
-            </p>
-
-        </div>
-
-    {% endif %}
-
-</div>
-
+    <div class="actions">
+      <button class="primary" id="analyzeButton" type="submit">開始辨識插座數量</button>
+      <button class="secondary" id="exportButton" type="button" disabled>匯出增減表 CSV</button>
+    </div>
+  </form>
+  <div id="status"></div>
+</section>
+
+<section class="card" id="result">
+  <h2>插座增減結果</h2>
+  <div class="summary" id="summary"></div>
+  <div class="main-result">
+    <div class="metric"><div class="label">原始圖插座總數</div><div class="value" id="oldCount">—</div></div>
+    <div class="metric"><div class="label">設計師修改圖插座總數</div><div class="value" id="newCount">—</div></div>
+    <div class="metric"><div class="label">淨增減</div><div class="value" id="netCount">—</div></div>
+  </div>
+  <div class="compare-grid">
+    <div class="image-panel">
+      <div class="image-title">原始圖（紅圈為辨識到的插座）</div>
+      <img id="oldResult" alt="原始圖插座辨識結果">
+      <div class="method" id="oldMethod"></div>
+    </div>
+    <div class="image-panel">
+      <div class="image-title">設計師修改圖（紅圈為辨識到的插座）</div>
+      <img id="newResult" alt="修改圖插座辨識結果">
+      <div class="method" id="newMethod"></div>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>設備項目</th><th>原圖數量</th><th>修改後數量</th><th>增加</th><th>減少</th><th>淨增減</th></tr></thead>
+    <tbody id="resultRows"></tbody>
+  </table>
+  <div class="note" id="resultNote"></div>
+</section>
+</main>
+<script>
+let latestRows=[];
+const form=document.getElementById('uploadForm');
+const statusEl=document.getElementById('status');
+const analyzeButton=document.getElementById('analyzeButton');
+const exportButton=document.getElementById('exportButton');
+
+form.addEventListener('submit',async (event)=>{
+  event.preventDefault();
+  const oldFile=document.getElementById('oldFile').files[0];
+  const newFile=document.getElementById('newFile').files[0];
+  if(!oldFile||!newFile){statusEl.textContent='請同時選擇原始圖及修改後圖。';statusEl.className='error';return;}
+  const payload=new FormData(form);
+  analyzeButton.disabled=true;
+  exportButton.disabled=true;
+  statusEl.textContent='正在讀取指定頁面並辨識插座，請勿關閉頁面。';
+  statusEl.className='';
+  try{
+    const response=await fetch('/analyze',{method:'POST',body:payload});
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||'辨識失敗');
+    document.getElementById('result').style.display='block';
+    document.getElementById('oldCount').textContent=data.old_count;
+    document.getElementById('newCount').textContent=data.new_count;
+    const net=data.difference;
+    document.getElementById('netCount').textContent=(net>0?'+':'')+net;
+    const summary=document.getElementById('summary');
+    summary.innerHTML='';
+    [
+      ['原圖 '+data.old_count+' 個',''],
+      ['修改後 '+data.new_count+' 個',''],
+      ['增加 '+data.added_count+' 個','plus'],
+      ['減少 '+data.removed_count+' 個','minus']
+    ].forEach(([label,cls])=>{const d=document.createElement('div');d.className='pill '+cls;d.textContent=label;summary.appendChild(d);});
+    document.getElementById('oldResult').src=data.old_image;
+    document.getElementById('newResult').src=data.new_image;
+    document.getElementById('oldMethod').textContent=data.old_method+'。'+data.old_note;
+    document.getElementById('newMethod').textContent=data.new_method+'。'+data.new_note;
+    const tr=document.createElement('tr');
+    const values=['全部插座（電氣＋弱電）',data.old_count,data.new_count,data.added_count,data.removed_count,(net>0?'+':'')+net];
+    values.forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td);});
+    const body=document.getElementById('resultRows');body.replaceChildren(tr);
+    latestRows=[{name:'全部插座（電氣＋弱電）',old_count:data.old_count,new_count:data.new_count,difference:net}];
+    document.getElementById('resultNote').textContent='統計目標為平面圖中的電氣插座與弱電插座。紅圈為自動辨識位置，請核對是否都落在插座符號上；若發現誤圈或漏圈，請勿直接將結果作為請款依據。';
+    exportButton.disabled=false;
+    statusEl.textContent='辨識完成。請檢查左右圖面的紅圈是否都落在插座符號上。';
+    statusEl.className='';
+    document.getElementById('result').scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(err){
+    statusEl.textContent=err.message;
+    statusEl.className='error';
+  }finally{
+    analyzeButton.disabled=false;
+  }
+});
+
+exportButton.addEventListener('click',async ()=>{
+  if(!latestRows.length)return;
+  try{
+    const r=await fetch('/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:latestRows})});
+    if(!r.ok)throw new Error('CSV 匯出失敗');
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download='DrawDiff插座增減統計.csv';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+  }catch(err){statusEl.textContent=err.message;statusEl.className='error';}
+});
+</script>
 </body>
-
 </html>
-"""
+'''
 
 
-# ============================================================
-# 檔案副檔名
-# ============================================================
+PLAN_X0 = 0.11
+PLAN_X1 = 0.73
+PLAN_Y0 = 0.20
+PLAN_Y1 = 0.84
+RENDER_SCALE = 4.0
 
-def allowed_file(filename):
 
-    if not filename:
-        return False
+def _filename_ext(filename):
+    return Path(filename or "").suffix.lower().lstrip(".")
 
-    if "." not in filename:
-        return False
 
-    extension = filename.rsplit(
-        ".",
-        1
-    )[1].lower()
-
-    return extension in ALLOWED_EXTENSIONS
-
-
-# ============================================================
-# 取得檔案副檔名
-# ============================================================
-
-def get_extension(filename):
-
-    if not filename:
-        return ""
-
-    if "." not in filename:
-        return ""
-
-    return filename.rsplit(
-        ".",
-        1
-    )[1].lower()
-
-
-# ============================================================
-# 讀取圖片 / PDF 指定頁
-# ============================================================
-
-def load_image_from_upload(
-    uploaded_file,
-    page_number=1
-):
-
-    if uploaded_file is None:
-        return None, "沒有上傳檔案。"
-
-
-    filename = uploaded_file.filename
-
-
-    if not allowed_file(filename):
-        return None, "檔案格式不支援。"
-
-
-    raw = uploaded_file.read()
-
-
-    if not raw:
-        return None, "檔案內容為空。"
-
-
-    extension = get_extension(filename)
-
-
-    # ========================================================
-    # PDF
-    # ========================================================
-
-    if extension == "pdf":
-
-        document = None
-
-        try:
-
-            document = fitz.open(
-                stream=raw,
-                filetype="pdf"
-            )
-
-
-            total_pages = len(document)
-
-
-            if total_pages == 0:
-
-                return (
-                    None,
-                    "PDF 沒有任何頁面。"
-                )
-
-
-            # 網頁輸入第 1 頁
-            # PyMuPDF 使用索引 0
-            page_index = page_number - 1
-
-
-            if page_index < 0:
-
-                return (
-                    None,
-                    "頁數必須從 1 開始。"
-                )
-
-
-            if page_index >= total_pages:
-
-                return (
-                    None,
-                    f"PDF 只有 {total_pages} 頁，"
-                    f"無法讀取第 {page_number} 頁。"
-                )
-
-
-            page = document.load_page(
-                page_index
-            )
-
-
-            pixmap = page.get_pixmap(
-
-                matrix=fitz.Matrix(
-                    2.5,
-                    2.5
-                ),
-
-                alpha=False
-
-            )
-
-
-            png_bytes = pixmap.tobytes(
-                "png"
-            )
-
-
-            array = np.frombuffer(
-                png_bytes,
-                np.uint8
-            )
-
-
-            image = cv2.imdecode(
-                array,
-                cv2.IMREAD_COLOR
-            )
-
-
-            if image is None:
-
-                return (
-                    None,
-                    "PDF 頁面轉換圖片失敗。"
-                )
-
-
-            return image, None
-
-
-        except Exception as error:
-
-            return (
-                None,
-                f"讀取 PDF 失敗：{str(error)}"
-            )
-
-
-        finally:
-
-            if document is not None:
-
-                document.close()
-
-
-    # ========================================================
-    # JPG / PNG
-    # ========================================================
-
-    try:
-
-        array = np.frombuffer(
-            raw,
-            np.uint8
+def _jpeg_data_url(image_bgr, max_side=1900, quality=84):
+    h, w = image_bgr.shape[:2]
+    scale = min(1.0, max_side / max(h, w))
+    if scale < 1.0:
+        image_bgr = cv2.resize(
+            image_bgr,
+            (int(w * scale), int(h * scale)),
+            interpolation=cv2.INTER_AREA
         )
-
-
-        image = cv2.imdecode(
-            array,
-            cv2.IMREAD_COLOR
-        )
-
-
-        if image is None:
-
-            return (
-                None,
-                "圖片讀取失敗。"
-            )
-
-
-        return image, None
-
-
-    except Exception as error:
-
-        return (
-            None,
-            f"圖片讀取失敗：{str(error)}"
-        )
-
-
-# ============================================================
-# 圖片轉 Base64
-# ============================================================
-
-def image_to_base64(image):
-
-    success, buffer = cv2.imencode(
-        ".png",
-        image
+    ok, buffer = cv2.imencode(
+        ".jpg",
+        image_bgr,
+        [int(cv2.IMWRITE_JPEG_QUALITY), quality]
     )
+    if not ok:
+        raise RuntimeError("結果圖片編碼失敗")
+    encoded = base64.b64encode(buffer.tobytes()).decode("ascii")
+    return "data:image/jpeg;base64," + encoded
 
 
-    if not success:
-        return ""
+def _mark_centers(image_bgr, centers):
+    """在插座符號中心畫紅圈。"""
+    result = image_bgr.copy()
+    h, w = result.shape[:2]
 
-
-    return base64.b64encode(
-        buffer.tobytes()
-    ).decode("utf-8")
-
-
-# ============================================================
-# 讀取符號模板
-# ============================================================
-
-def load_symbol_templates():
-
-    templates = []
-
-
-    if not SYMBOL_DIR.exists():
-
-        return templates
-
-
-    for file_path in sorted(
-        SYMBOL_DIR.iterdir()
-    ):
-
-        if not file_path.is_file():
+    for cx, cy, radius in centers:
+        x = int(round(cx))
+        y = int(round(cy))
+        r = max(10, int(round(radius)))
+        if not (0 <= x < w and 0 <= y < h):
             continue
-
-
-        extension = file_path.suffix.lower()
-
-
-        if extension not in {
-            ".png",
-            ".jpg",
-            ".jpeg"
-        }:
-
-            continue
-
-
-        template = cv2.imread(
-
-            str(file_path),
-
-            cv2.IMREAD_GRAYSCALE
-
+        cv2.circle(
+            result,
+            (x, y),
+            r,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA
         )
-
-
-        if template is None:
-            continue
-
-
-        if (
-            template.shape[0] < 5
-            or
-            template.shape[1] < 5
-        ):
-
-            continue
-
-
-        templates.append({
-
-            "name": file_path.stem,
-
-            "image": template
-
-        })
-
-
-    return templates
-
-
-# ============================================================
-# 計算 IoU
-# ============================================================
-
-def calculate_iou(
-    box_a,
-    box_b
-):
-
-    ax1 = box_a["x"]
-    ay1 = box_a["y"]
-
-    ax2 = ax1 + box_a["w"]
-    ay2 = ay1 + box_a["h"]
-
-
-    bx1 = box_b["x"]
-    by1 = box_b["y"]
-
-    bx2 = bx1 + box_b["w"]
-    by2 = by1 + box_b["h"]
-
-
-    intersection_x1 = max(
-        ax1,
-        bx1
-    )
-
-    intersection_y1 = max(
-        ay1,
-        by1
-    )
-
-    intersection_x2 = min(
-        ax2,
-        bx2
-    )
-
-    intersection_y2 = min(
-        ay2,
-        by2
-    )
-
-
-    intersection_width = max(
-        0,
-        intersection_x2 - intersection_x1
-    )
-
-    intersection_height = max(
-        0,
-        intersection_y2 - intersection_y1
-    )
-
-
-    intersection_area = (
-        intersection_width
-        *
-        intersection_height
-    )
-
-
-    area_a = (
-        (ax2 - ax1)
-        *
-        (ay2 - ay1)
-    )
-
-    area_b = (
-        (bx2 - bx1)
-        *
-        (by2 - by1)
-    )
-
-
-    union_area = (
-        area_a
-        +
-        area_b
-        -
-        intersection_area
-    )
-
-
-    if union_area <= 0:
-
-        return 0.0
-
-
-    return (
-        intersection_area
-        /
-        union_area
-    )
-
-
-# ============================================================
-# 同一符號內去除重複
-# ============================================================
-
-def remove_duplicate_matches(matches):
-
-    matches = sorted(
-
-        matches,
-
-        key=lambda item: item["score"],
-
-        reverse=True
-
-    )
-
-
-    kept = []
-
-
-    for candidate in matches:
-
-        duplicate = False
-
-
-        for existing in kept:
-
-            overlap = calculate_iou(
-                candidate,
-                existing
-            )
-
-
-            candidate_cx = (
-                candidate["x"]
-                +
-                candidate["w"] / 2
-            )
-
-            candidate_cy = (
-                candidate["y"]
-                +
-                candidate["h"] / 2
-            )
-
-
-            existing_cx = (
-                existing["x"]
-                +
-                existing["w"] / 2
-            )
-
-            existing_cy = (
-                existing["y"]
-                +
-                existing["h"] / 2
-            )
-
-
-            distance = (
-
-                (
-                    candidate_cx
-                    -
-                    existing_cx
-                ) ** 2
-
-                +
-
-                (
-                    candidate_cy
-                    -
-                    existing_cy
-                ) ** 2
-
-            ) ** 0.5
-
-
-            min_size = min(
-
-                max(
-                    candidate["w"],
-                    candidate["h"]
-                ),
-
-                max(
-                    existing["w"],
-                    existing["h"]
-                )
-
-            )
-
-
-            if (
-
-                overlap >= 0.30
-
-                or
-
-                distance <= max(
-                    5,
-                    min_size * 0.30
-                )
-
-            ):
-
-                duplicate = True
-
-                break
-
-
-        if not duplicate:
-
-            kept.append(
-                candidate
-            )
-
-
-    return kept
-
-
-# ============================================================
-# 不同符號之間去除重複
-# ============================================================
-
-def remove_cross_class_duplicates(detections):
-
-    all_items = []
-
-
-    for symbol_name, matches in detections.items():
-
-        for item in matches:
-
-            current = dict(item)
-
-            current["symbol_name"] = symbol_name
-
-            all_items.append(
-                current
-            )
-
-
-    all_items.sort(
-
-        key=lambda item: item["score"],
-
-        reverse=True
-
-    )
-
-
-    kept = []
-
-
-    for candidate in all_items:
-
-        duplicate = False
-
-
-        candidate_cx = (
-            candidate["x"]
-            +
-            candidate["w"] / 2
-        )
-
-        candidate_cy = (
-            candidate["y"]
-            +
-            candidate["h"] / 2
-        )
-
-
-        for existing in kept:
-
-            existing_cx = (
-                existing["x"]
-                +
-                existing["w"] / 2
-            )
-
-            existing_cy = (
-                existing["y"]
-                +
-                existing["h"] / 2
-            )
-
-
-            distance = (
-
-                (
-                    candidate_cx
-                    -
-                    existing_cx
-                ) ** 2
-
-                +
-
-                (
-                    candidate_cy
-                    -
-                    existing_cy
-                ) ** 2
-
-            ) ** 0.5
-
-
-            overlap = calculate_iou(
-                candidate,
-                existing
-            )
-
-
-            min_size = min(
-
-                max(
-                    candidate["w"],
-                    candidate["h"]
-                ),
-
-                max(
-                    existing["w"],
-                    existing["h"]
-                )
-
-            )
-
-
-            if (
-
-                overlap >= 0.50
-
-                and
-
-                distance <= max(
-                    5,
-                    min_size * 0.40
-                )
-
-            ):
-
-                duplicate = True
-
-                break
-
-
-        if not duplicate:
-
-            kept.append(
-                candidate
-            )
-
-
-    cleaned = {
-
-        symbol_name: []
-
-        for symbol_name
-        in detections
-
-    }
-
-
-    for item in kept:
-
-        cleaned[
-            item["symbol_name"]
-        ].append({
-
-            "x": item["x"],
-            "y": item["y"],
-            "w": item["w"],
-            "h": item["h"],
-            "score": item["score"]
-
-        })
-
-
-    return cleaned
-
-
-# ============================================================
-# 進行符號辨識
-# ============================================================
-
-def detect_symbols(image):
-
-    if image is None:
-
-        return {}
-
-
-    gray = cv2.cvtColor(
-
-        image,
-
-        cv2.COLOR_BGR2GRAY
-
-    )
-
-
-    templates = load_symbol_templates()
-
-
-    detections = {}
-
-
-    for template_data in templates:
-
-        symbol_name = template_data["name"]
-
-        template = template_data["image"]
-
-
-        template_height = template.shape[0]
-
-        template_width = template.shape[1]
-
-
-        if (
-
-            template_height > gray.shape[0]
-
-            or
-
-            template_width > gray.shape[1]
-
-        ):
-
-            continue
-
-
-        result = cv2.matchTemplate(
-
-            gray,
-
-            template,
-
-            cv2.TM_CCOEFF_NORMED
-
-        )
-
-
-        # ====================================================
-        # 辨識門檻
-        # ====================================================
-
-        threshold = 0.62
-
-
-        locations = np.where(
-            result >= threshold
-        )
-
-
-        matches = []
-
-
-        for y, x in zip(
-
-            locations[0],
-
-            locations[1]
-
-        ):
-
-            score = float(
-                result[y, x]
-            )
-
-
-            matches.append({
-
-                "x": int(x),
-
-                "y": int(y),
-
-                "w": int(template_width),
-
-                "h": int(template_height),
-
-                "score": score
-
-            })
-
-
-        matches = remove_duplicate_matches(
-            matches
-        )
-
-
-        detections[
-            symbol_name
-        ] = matches
-
-
-    detections = remove_cross_class_duplicates(
-        detections
-    )
-
-
-    return detections
-
-
-# ============================================================
-# 計算全部辨識數量
-# ============================================================
-
-def count_detections(detections):
-
-    total = 0
-
-
-    for matches in detections.values():
-
-        total += len(matches)
-
-
-    return total
-
-
-# ============================================================
-# 圖面畫紅圈
-# ============================================================
-
-def draw_detected_symbols(
-    image,
-    detections
-):
-
-    result = image.copy()
-
-
-    number = 1
-
-
-    for symbol_name, matches in detections.items():
-
-        for match in matches:
-
-            x = match["x"]
-            y = match["y"]
-
-            w = match["w"]
-            h = match["h"]
-
-
-            center_x = x + w // 2
-            center_y = y + h // 2
-
-
-            radius = max(
-
-                10,
-
-                int(
-                    max(w, h)
-                    *
-                    0.60
-                )
-
-            )
-
-
-            cv2.circle(
-
-                result,
-
-                (
-                    center_x,
-                    center_y
-                ),
-
-                radius,
-
-                (
-                    0,
-                    0,
-                    255
-                ),
-
-                2
-
-            )
-
-
-            label_x = max(
-                12,
-                center_x - radius
-            )
-
-            label_y = max(
-                12,
-                center_y - radius
-            )
-
-
-            cv2.circle(
-
-                result,
-
-                (
-                    label_x,
-                    label_y
-                ),
-
-                11,
-
-                (
-                    0,
-                    0,
-                    255
-                ),
-
-                -1
-
-            )
-
-
-            label = str(number)
-
-
-            text_size, _ = cv2.getTextSize(
-
-                label,
-
-                cv2.FONT_HERSHEY_SIMPLEX,
-
-                0.40,
-
-                1
-
-            )
-
-
-            text_x = int(
-
-                label_x
-                -
-                text_size[0] / 2
-
-            )
-
-            text_y = int(
-
-                label_y
-                +
-                text_size[1] / 2
-
-            )
-
-
-            cv2.putText(
-
-                result,
-
-                label,
-
-                (
-                    text_x,
-                    text_y
-                ),
-
-                cv2.FONT_HERSHEY_SIMPLEX,
-
-                0.40,
-
-                (
-                    255,
-                    255,
-                    255
-                ),
-
-                1,
-
-                cv2.LINE_AA
-
-            )
-
-
-            number += 1
-
 
     return result
 
 
-# ============================================================
-# 首頁
-# ============================================================
+def _vector_socket_centers(page):
+    """
+    CAD 向量 PDF：定位平面圖中重複的插座外圈圓形路徑。
+    排除右側圖例表格、標題欄及頁面外框。
+    """
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        return []
 
-@app.route(
-    "/",
-    methods=["GET"]
-)
-def index():
+    page_w = float(page.rect.width)
+    page_h = float(page.rect.height)
+    candidates = []
 
-    return render_template_string(
+    for drawing in drawings:
+        items = drawing.get("items", [])
+        if len(items) != 4 or not all(item[0] == "c" for item in items):
+            continue
 
-        PAGE_HTML,
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
 
-        result=None,
+        visible_rect = rect * page.rotation_matrix
+        width = float(visible_rect.width)
+        height = float(visible_rect.height)
 
-        error=None
+        if abs(width - height) > 0.25:
+            continue
 
+        diameter = (width + height) / 2.0
+        if not (10.0 <= diameter <= 18.0):
+            continue
+
+        cx = (visible_rect.x0 + visible_rect.x1) / 2.0
+        cy = (visible_rect.y0 + visible_rect.y1) / 2.0
+
+        if not (PLAN_X0 * page_w <= cx <= PLAN_X1 * page_w):
+            continue
+        if not (PLAN_Y0 * page_h <= cy <= PLAN_Y1 * page_h):
+            continue
+
+        candidates.append((cx, cy, diameter))
+
+    if len(candidates) < 8:
+        return []
+
+    from collections import Counter
+    size_counts = Counter(round(item[2], 1) for item in candidates)
+    dominant_size, dominant_count = size_counts.most_common(1)[0]
+
+    if dominant_count < 8:
+        return []
+
+    selected = [
+        item for item in candidates
+        if abs(item[2] - dominant_size) <= 0.25
+    ]
+
+    selected.sort(key=lambda item: item[2], reverse=True)
+    kept = []
+
+    for cx, cy, diameter in selected:
+        if any(
+            (cx - x) ** 2 + (cy - y) ** 2 < 2.0 ** 2
+            for x, y, _ in kept
+        ):
+            continue
+        kept.append((cx, cy, diameter))
+
+    return [
+        (
+            cx * RENDER_SCALE,
+            cy * RENDER_SCALE,
+            diameter * RENDER_SCALE * 0.58
+        )
+        for cx, cy, diameter in kept
+    ]
+
+
+def _raster_socket_centers(image_bgr):
+    """掃描 PDF：在平面圖區域偵測插座外圈。"""
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+
+    x0 = int(w * PLAN_X0)
+    x1 = int(w * PLAN_X1)
+    y0 = int(h * PLAN_Y0)
+    y1 = int(h * PLAN_Y1)
+
+    roi = gray[y0:y1, x0:x1]
+    if roi.size == 0:
+        return []
+
+    small = cv2.resize(
+        roi,
+        None,
+        fx=0.5,
+        fy=0.5,
+        interpolation=cv2.INTER_AREA
+    )
+    blurred = cv2.GaussianBlur(small, (5, 5), 1.2)
+
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=27,
+        param1=80,
+        param2=39,
+        minRadius=10,
+        maxRadius=19
     )
 
+    if circles is None:
+        return []
 
-# ============================================================
-# 分析圖面
-# ============================================================
+    results = []
 
-@app.route(
-    "/analyze",
-    methods=["POST"]
-)
-def analyze():
+    for cx, cy, radius in np.round(circles[0]).astype(int):
+        results.append((
+            float(x0 + cx * 2),
+            float(y0 + cy * 2),
+            float(max(radius * 2, 12))
+        ))
 
-    original_file = request.files.get(
-        "original_file"
-    )
-
-    modified_file = request.files.get(
-        "modified_file"
-    )
+    return results
 
 
-    # ========================================================
-    # 取得使用者選擇的頁數
-    # ========================================================
+def _analyze_pdf(file_bytes, page_number):
+    try:
+        document = fitz.open(stream=file_bytes, filetype="pdf")
+    except Exception as exc:
+        raise ValueError(f"PDF 無法開啟：{exc}")
 
     try:
-
-        original_page = int(
-            request.form.get(
-                "original_page",
-                1
-            )
-        )
-
-    except ValueError:
-
-        original_page = 1
-
-
-    try:
-
-        modified_page = int(
-            request.form.get(
-                "modified_page",
-                1
-            )
-        )
-
-    except ValueError:
-
-        modified_page = 1
-
-
-    # ========================================================
-    # 驗證頁數
-    # ========================================================
-
-    if original_page < 1:
-
-        return render_template_string(
-
-            PAGE_HTML,
-
-            result=None,
-
-            error="原始圖頁數必須從 1 開始。"
-
-        )
-
-
-    if modified_page < 1:
-
-        return render_template_string(
-
-            PAGE_HTML,
-
-            result=None,
-
-            error="修改後圖頁數必須從 1 開始。"
-
-        )
-
-
-    # ========================================================
-    # 驗證檔案
-    # ========================================================
-
-    if original_file is None:
-
-        return render_template_string(
-
-            PAGE_HTML,
-
-            result=None,
-
-            error="請上傳原始圖。"
-
-        )
-
-
-    if modified_file is None:
-
-        return render_template_string(
-
-            PAGE_HTML,
-
-            result=None,
-
-            error="請上傳修改後圖。"
-
-        )
-
-
-    if not allowed_file(
-        original_file.filename
-    ):
-
-        return render_template_string(
-
-            PAGE_HTML,
-
-            result=None,
-
-            error="原始圖格式不支援。"
-
-        )
-
-
-    if not allowed_file(
-        modified_file.filename
-    ):
-
-        return render_template_string(
-
-            PAGE_HTML,
-
-            result=None,
-
-            error="修改後圖格式不支援。"
-
-        )
-
-
-    # ========================================================
-    # 讀取原始圖指定頁
-    # ========================================================
-
-    original_image, original_error = (
-        load_image_from_upload(
-
-            original_file,
-
-            original_page
-
-        )
-    )
-
-
-    if original_image is None:
-
-        return render_template_string(
-
-            PAGE_HTML,
-
-            result=None,
-
-            error=(
-                "原始圖無法讀取："
-                +
-                str(original_error)
+        page_index = page_number - 1
+
+        if page_index < 0 or page_index >= len(document):
+            raise ValueError(
+                f"PDF 只有 {len(document)} 頁，指定的第 {page_number} 頁不存在。"
             )
 
+        page = document.load_page(page_index)
+
+        pix = page.get_pixmap(
+            matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE),
+            alpha=False,
+            colorspace=fitz.csRGB
         )
 
+        rgb = np.frombuffer(
+            pix.samples,
+            dtype=np.uint8
+        ).reshape(pix.height, pix.width, pix.n)
 
-    # ========================================================
-    # 讀取修改圖指定頁
-    # ========================================================
+        image_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
-    modified_image, modified_error = (
-        load_image_from_upload(
+        vector_centers = _vector_socket_centers(page)
 
-            modified_file,
+        if vector_centers:
+            centers = vector_centers
+            method = "PDF 向量符號定位"
+            note = "此頁保留向量圖元，以重複的插座外圈路徑計數。"
+        else:
+            centers = _raster_socket_centers(image_bgr)
+            method = "高解析度圖面圓形辨識"
+            note = "此頁為影像圖面，請核對紅圈是否都落在插座上。"
 
-            modified_page
-
-        )
-    )
-
-
-    if modified_image is None:
-
-        return render_template_string(
-
-            PAGE_HTML,
-
-            result=None,
-
-            error=(
-                "修改後圖無法讀取："
-                +
-                str(modified_error)
+        if not centers:
+            raise ValueError(
+                "這一頁沒有找到可辨識的插座符號。請確認頁碼。"
             )
 
+        marked = _mark_centers(image_bgr, centers)
+
+        return {
+            "count": len(centers),
+            "image": _jpeg_data_url(marked),
+            "method": method,
+            "note": note
+        }
+    finally:
+        document.close()
+
+
+def _analyze_image(file_bytes):
+    array = np.frombuffer(file_bytes, dtype=np.uint8)
+    image = cv2.imdecode(array, cv2.IMREAD_COLOR)
+
+    if image is None:
+        raise ValueError("圖片無法讀取。")
+
+    h, w = image.shape[:2]
+
+    if max(h, w) < 1600:
+        raise ValueError(
+            "這張圖片解析度太低，無法可靠清點小型插座符號。請上傳原始 PDF。"
         )
 
+    centers = _raster_socket_centers(image)
 
-    # ========================================================
-    # 原圖單獨辨識
-    # ========================================================
+    if not centers:
+        raise ValueError("圖片中沒有找到可辨識的插座符號。")
 
-    original_detections = detect_symbols(
-        original_image
-    )
+    marked = _mark_centers(image, centers)
 
-
-    # ========================================================
-    # 修改圖單獨辨識
-    # ========================================================
-
-    modified_detections = detect_symbols(
-        modified_image
-    )
-
-
-    # ========================================================
-    # 各自計算數量
-    # ========================================================
-
-    original_total = count_detections(
-        original_detections
-    )
-
-
-    modified_total = count_detections(
-        modified_detections
-    )
-
-
-    added = max(
-
-        0,
-
-        modified_total
-        -
-        original_total
-
-    )
-
-
-    removed = max(
-
-        0,
-
-        original_total
-        -
-        modified_total
-
-    )
-
-
-    net_change = (
-
-        modified_total
-        -
-        original_total
-
-    )
-
-
-    # ========================================================
-    # 畫辨識結果
-    # ========================================================
-
-    original_marked = draw_detected_symbols(
-
-        original_image,
-
-        original_detections
-
-    )
-
-
-    modified_marked = draw_detected_symbols(
-
-        modified_image,
-
-        modified_detections
-
-    )
-
-
-    # ========================================================
-    # 回傳結果
-    # ========================================================
-
-    result = {
-
-        "original_total": original_total,
-
-        "modified_total": modified_total,
-
-        "added": added,
-
-        "removed": removed,
-
-        "net_change": (
-            f"{net_change:+d}"
-        ),
-
-        "original_image": image_to_base64(
-            original_marked
-        ),
-
-        "modified_image": image_to_base64(
-            modified_marked
-        )
-
+    return {
+        "count": len(centers),
+        "image": _jpeg_data_url(marked),
+        "method": "高解析度圖面圓形辨識",
+        "note": "此頁為點陣圖面，請核對紅圈是否都落在插座上。"
     }
 
 
-    return render_template_string(
+def analyze_upload(upload, page_number):
+    filename = upload.filename or ""
+    ext = _filename_ext(filename)
 
-        PAGE_HTML,
+    if ext not in ALLOWED:
+        raise ValueError("只支援 PDF、PNG、JPG、JPEG、BMP、TIF、TIFF。")
 
-        result=result,
+    raw = upload.read()
 
-        error=None
+    if not raw:
+        raise ValueError(f"檔案是空的：{filename}")
 
-    )
+    if ext == "pdf":
+        return _analyze_pdf(raw, page_number)
+
+    return _analyze_image(raw)
 
 
-# ============================================================
-# Render 啟動
-# ============================================================
+@app.get("/")
+def index():
+    return render_template_string(INDEX_HTML)
 
-if __name__ == "__main__":
 
-    port = int(
+@app.post("/analyze")
+def analyze_api():
+    old_file = request.files.get("old")
+    new_file = request.files.get("new")
 
-        os.environ.get(
-            "PORT",
-            10000
+    if not old_file or not new_file:
+        return jsonify(
+            error="請同時選擇原始圖 PDF 與設計師修改圖 PDF。"
+        ), 400
+
+    try:
+        old_page = int(request.form.get("old_page", "4"))
+        new_page = int(request.form.get("new_page", "3"))
+
+        if old_page < 1 or new_page < 1:
+            raise ValueError("PDF 頁碼必須從 1 開始。")
+
+        old_result = analyze_upload(old_file, old_page)
+        new_result = analyze_upload(new_file, new_page)
+
+        old_count = old_result["count"]
+        new_count = new_result["count"]
+        difference = new_count - old_count
+
+        added = max(difference, 0)
+        removed = max(-difference, 0)
+
+        return jsonify(
+            old_count=old_count,
+            new_count=new_count,
+            difference=difference,
+            added_count=added,
+            removed_count=removed,
+            old_image=old_result["image"],
+            new_image=new_result["image"],
+            old_method=old_result["method"],
+            new_method=new_result["method"],
+            old_note=old_result["note"],
+            new_note=new_result["note"],
+            rows=[{
+                "name": "全部插座（電氣＋弱電）",
+                "old_count": old_count,
+                "new_count": new_count,
+                "difference": difference
+            }]
         )
 
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+
+    except Exception as exc:
+        app.logger.exception("socket count failed")
+        return jsonify(error=f"辨識失敗：{exc}"), 500
+
+
+@app.post("/export")
+def export_csv():
+    data = request.get_json(silent=True) or {}
+    rows = data.get("rows", [])
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        "設備項目",
+        "原圖數量",
+        "修改後數量",
+        "增加",
+        "減少",
+        "淨增減"
+    ])
+
+    for row in rows:
+        diff = int(row.get("difference", 0))
+
+        writer.writerow([
+            row.get("name", "全部插座"),
+            row.get("old_count", 0),
+            row.get("new_count", 0),
+            max(diff, 0),
+            max(-diff, 0),
+            diff
+        ])
+
+    return Response(
+        "\ufeff" + output.getvalue(),
+        mimetype="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition":
+                "attachment; filename=DrawDiff插座增減統計.csv"
+        }
     )
 
 
-    app.run(
-
-        host="0.0.0.0",
-
-        port=port,
-
-        debug=False
-
-    )
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
