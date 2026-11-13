@@ -6,12 +6,7 @@ import cv2
 import fitz
 import numpy as np
 
-from flask import (
-    Flask,
-    render_template_string,
-    request,
-    jsonify
-)
+from flask import Flask, request, render_template_string
 
 
 # ============================================================
@@ -23,1540 +18,677 @@ BASE_DIR = Path(__file__).resolve().parent
 SYMBOL_DIR = BASE_DIR / "static" / "symbols"
 
 ALLOWED_EXTENSIONS = {
-    "pdf",
-    "png",
     "jpg",
     "jpeg",
-    "bmp",
-    "tif",
-    "tiff"
+    "png",
+    "pdf"
 }
-
 
 app = Flask(__name__)
 
-app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
-
 
 # ============================================================
-# 13 種圖案名稱
-#
-# 如果你之後要改中文名稱，
-# 只需要改這裡，不影響辨識。
+# 網頁 HTML
 # ============================================================
 
-SYMBOL_NAMES = {
-
-    0: "設備 0",
-
-    1: "設備 1",
-
-    2: "設備 2",
-
-    3: "設備 3",
-
-    4: "設備 4",
-
-    5: "設備 5",
-
-    6: "設備 6",
-
-    7: "設備 7",
-
-    8: "設備 8",
-
-    9: "設備 9",
-
-    10: "設備 10",
-
-    11: "設備 11",
-
-    12: "設備 12"
-}
-
-
-# ============================================================
-# HTML
-# ============================================================
-
-INDEX_HTML = r"""
+PAGE_HTML = """
 <!DOCTYPE html>
-
 <html lang="zh-Hant">
-
 <head>
-
-<meta charset="UTF-8">
-
-<meta
-name="viewport"
-content="width=device-width, initial-scale=1.0"
->
-
-<title>DrawDiff</title>
-
-<style>
-
-*{
-    box-sizing:border-box;
-}
-
-body{
-    margin:0;
-    padding:25px;
-    font-family:
-        Arial,
-        "Microsoft JhengHei",
-        "Noto Sans TC",
-        sans-serif;
-
-    background:#f3f5f7;
-    color:#1d2935;
-}
-
-.container{
-    max-width:1600px;
-    margin:auto;
-}
-
-h1{
-    margin:0 0 8px 0;
-}
-
-.subtitle{
-    color:#667785;
-    margin-bottom:25px;
-}
-
-.card{
-    background:white;
-    border-radius:14px;
-    padding:22px;
-    margin-bottom:20px;
-    box-shadow:
-        0 2px 10px
-        rgba(0,0,0,0.06);
-}
-
-.upload-grid{
-
-    display:grid;
-
-    grid-template-columns:
-        1fr
-        1fr;
-
-    gap:20px;
-}
-
-.upload-box{
-
-    border:
-        2px dashed
-        #c9d3da;
-
-    border-radius:12px;
-
-    padding:20px;
-
-    background:#fafcfd;
-}
-
-.upload-box h3{
-    margin-top:0;
-}
-
-input[type=file]{
-
-    width:100%;
-
-    margin-top:12px;
-}
-
-.page-box{
-
-    margin-top:15px;
-
-    display:flex;
-
-    align-items:center;
-
-    gap:10px;
-}
-
-input[type=number]{
-
-    width:100px;
-
-    padding:8px;
-
-    border:
-        1px solid
-        #c9d3da;
-
-    border-radius:7px;
-}
-
-button{
-
-    margin-top:20px;
-
-    padding:
-        12px
-        24px;
-
-    border:none;
-
-    border-radius:9px;
-
-    font-size:16px;
-
-    cursor:pointer;
-
-    background:#17627f;
-
-    color:white;
-}
-
-button:disabled{
-
-    opacity:0.5;
-
-    cursor:not-allowed;
-}
-
-#status{
-
-    margin-top:15px;
-
-    font-size:15px;
-
-    color:#566773;
-}
-
-.error{
-
-    color:#b42318 !important;
-}
-
-#result{
-
-    display:none;
-}
-
-.summary{
-
-    display:grid;
-
-    grid-template-columns:
-        repeat(4,1fr);
-
-    gap:12px;
-
-    margin-bottom:20px;
-}
-
-.summary-box{
-
-    border-radius:10px;
-
-    padding:15px;
-
-    background:#edf3f6;
-}
-
-.summary-label{
-
-    font-size:13px;
-
-    color:#687987;
-}
-
-.summary-value{
-
-    font-size:30px;
-
-    font-weight:bold;
-
-    margin-top:5px;
-}
-
-.images{
-
-    display:grid;
-
-    grid-template-columns:
-        1fr
-        1fr;
-
-    gap:20px;
-
-    margin-top:20px;
-}
-
-.image-box{
-
-    border:
-        1px solid
-        #d7e0e6;
-
-    border-radius:10px;
-
-    padding:12px;
-
-    background:#fafcfd;
-}
-
-.image-title{
-
-    text-align:center;
-
-    font-weight:bold;
-
-    margin-bottom:10px;
-}
-
-.image-box img{
-
-    width:100%;
-
-    display:block;
-
-    border:
-        1px solid
-        #e0e6ea;
-}
-
-table{
-
-    width:100%;
-
-    border-collapse:collapse;
-
-    margin-top:25px;
-}
-
-th,
-td{
-
-    border-bottom:
-        1px solid
-        #dfe6ea;
-
-    padding:12px;
-
-    text-align:center;
-}
-
-th{
-
-    background:#edf3f6;
-}
-
-td:first-child,
-th:first-child{
-
-    text-align:left;
-}
-
-.plus{
-
-    color:#13834d;
-
-    font-weight:bold;
-}
-
-.minus{
-
-    color:#c0352b;
-
-    font-weight:bold;
-}
-
-.total-row{
-
-    font-weight:bold;
-
-    background:#f1f5f7;
-}
-
-@media(max-width:900px){
-
-    .upload-grid,
-    .images{
-
-        grid-template-columns:
-            1fr;
-    }
-
-    .summary{
-
-        grid-template-columns:
-            1fr
-            1fr;
-    }
-}
-
-</style>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
+
+    <title>DrawDiff 圖面設備比對</title>
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 30px;
+            font-family:
+                Arial,
+                "Microsoft JhengHei",
+                sans-serif;
+
+            background: #f3f6f8;
+            color: #1f2933;
+        }
+
+        .container {
+            max-width: 1500px;
+            margin: auto;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+        }
+
+        .card {
+            background: white;
+            border: 1px solid #d9e2e8;
+            border-radius: 14px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .upload-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .upload-box {
+            border: 2px dashed #b9c9d3;
+            border-radius: 12px;
+            padding: 25px;
+            text-align: center;
+            background: #fafcfd;
+        }
+
+        .upload-box h3 {
+            margin-top: 0;
+        }
+
+        input[type=file] {
+            max-width: 100%;
+        }
+
+        .button-row {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        button {
+            border: 0;
+            border-radius: 8px;
+            padding: 12px 24px;
+            font-size: 16px;
+            cursor: pointer;
+            background: #16857a;
+            color: white;
+        }
+
+        button:hover {
+            background: #116d64;
+        }
+
+        .summary {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .badge {
+            background: #edf4f6;
+            padding: 10px 18px;
+            border-radius: 30px;
+            font-weight: bold;
+        }
+
+        .add {
+            color: #0b7a3d;
+        }
+
+        .remove {
+            color: #c62828;
+        }
+
+        .image-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .image-card {
+            border: 1px solid #cfdce3;
+            border-radius: 10px;
+            padding: 12px;
+            text-align: center;
+            overflow: hidden;
+        }
+
+        .image-card h3 {
+            margin-top: 0;
+        }
+
+        .image-card img {
+            width: 100%;
+            max-height: 800px;
+            object-fit: contain;
+            border: 1px solid #dbe4e8;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 25px;
+        }
+
+        th {
+            background: #e8f0f3;
+        }
+
+        th,
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #dbe4e8;
+            text-align: center;
+        }
+
+        .error {
+            padding: 15px;
+            border-radius: 8px;
+            background: #ffe8e8;
+            color: #b71c1c;
+            margin-bottom: 20px;
+        }
+
+        .small {
+            color: #60727c;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+
+        @media (max-width: 900px) {
+
+            body {
+                padding: 12px;
+            }
+
+            .upload-grid,
+            .image-grid {
+                grid-template-columns: 1fr;
+            }
+
+        }
+
+    </style>
 
 </head>
-
 
 <body>
 
 <div class="container">
 
-<h1>DrawDiff｜客變插座辨識</h1>
+    <h1>DrawDiff 圖面設備辨識</h1>
 
-<div class="subtitle">
+    <div class="card">
 
-使用 static/symbols/0.png ～ 12.png
-直接辨識左右兩張圖面，
-逐項計算增加與減少。
+        <form
+            method="POST"
+            action="/analyze"
+            enctype="multipart/form-data"
+        >
+
+            <div class="upload-grid">
+
+                <div class="upload-box">
+
+                    <h3>原始圖</h3>
+
+                    <p>JPG / PNG / PDF</p>
+
+                    <input
+                        type="file"
+                        name="original_file"
+                        accept=".jpg,.jpeg,.png,.pdf"
+                        required
+                    >
+
+                </div>
+
+
+                <div class="upload-box">
+
+                    <h3>修改後圖</h3>
+
+                    <p>JPG / PNG / PDF</p>
+
+                    <input
+                        type="file"
+                        name="modified_file"
+                        accept=".jpg,.jpeg,.png,.pdf"
+                        required
+                    >
+
+                </div>
+
+            </div>
+
+
+            <div class="button-row">
+
+                <button type="submit">
+                    開始自動辨識
+                </button>
+
+            </div>
+
+        </form>
+
+    </div>
+
+
+    {% if error %}
+
+        <div class="error">
+            {{ error }}
+        </div>
+
+    {% endif %}
+
+
+    {% if result %}
+
+        <div class="card">
+
+            <h2>插座增減結果</h2>
+
+
+            <div class="summary">
+
+                <div class="badge">
+                    原圖 {{ result.original_total }} 個
+                </div>
+
+                <div class="badge">
+                    修改後 {{ result.modified_total }} 個
+                </div>
+
+                <div class="badge add">
+                    增加 {{ result.added }} 個
+                </div>
+
+                <div class="badge remove">
+                    減少 {{ result.removed }} 個
+                </div>
+
+            </div>
+
+
+            <div class="image-grid">
+
+                <div class="image-card">
+
+                    <h3>
+                        原始圖（紅圈為辨識到的設備符號）
+                    </h3>
+
+                    <img
+                        src="data:image/png;base64,{{ result.original_image }}"
+                    >
+
+                </div>
+
+
+                <div class="image-card">
+
+                    <h3>
+                        修改後圖（紅圈為辨識到的設備符號）
+                    </h3>
+
+                    <img
+                        src="data:image/png;base64,{{ result.modified_image }}"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <table>
+
+                <thead>
+
+                    <tr>
+                        <th>設備項目</th>
+                        <th>原圖數量</th>
+                        <th>修改後數量</th>
+                        <th>增加</th>
+                        <th>減少</th>
+                        <th>淨增減</th>
+                    </tr>
+
+                </thead>
+
+
+                <tbody>
+
+                    <tr>
+
+                        <td>全部插座／設備符號</td>
+
+                        <td>
+                            {{ result.original_total }}
+                        </td>
+
+                        <td>
+                            {{ result.modified_total }}
+                        </td>
+
+                        <td class="add">
+                            {{ result.added }}
+                        </td>
+
+                        <td class="remove">
+                            {{ result.removed }}
+                        </td>
+
+                        <td>
+                            {{ result.net_change }}
+                        </td>
+
+                    </tr>
+
+                </tbody>
+
+            </table>
+
+
+            <p class="small">
+
+                本次辨識只使用圖面上的設備符號進行計算，
+                不讀取設計師圖面右側或旁邊的統計表格。
+
+            </p>
+
+        </div>
+
+    {% endif %}
 
 </div>
-
-
-<!-- ===================================================== -->
-<!-- 上傳 -->
-<!-- ===================================================== -->
-
-<div class="card">
-
-<form id="uploadForm">
-
-<div class="upload-grid">
-
-
-<!-- 原圖 -->
-
-<div class="upload-box">
-
-<h3>原始圖</h3>
-
-<input
-type="file"
-id="oldFile"
-name="old"
-accept=".pdf,.png,.jpg,.jpeg,.bmp,.tif,.tiff"
-required
->
-
-<div class="page-box">
-
-<label>PDF 頁碼：</label>
-
-<input
-type="number"
-id="oldPage"
-name="old_page"
-value="4"
-min="1"
->
-
-</div>
-
-</div>
-
-
-<!-- 修改圖 -->
-
-<div class="upload-box">
-
-<h3>修改後圖</h3>
-
-<input
-type="file"
-id="newFile"
-name="new"
-accept=".pdf,.png,.jpg,.jpeg,.bmp,.tif,.tiff"
-required
->
-
-<div class="page-box">
-
-<label>PDF 頁碼：</label>
-
-<input
-type="number"
-id="newPage"
-name="new_page"
-value="3"
-min="1"
->
-
-</div>
-
-</div>
-
-
-</div>
-
-
-<button
-id="analyzeButton"
-type="submit"
->
-
-開始辨識
-
-</button>
-
-</form>
-
-
-<div id="status"></div>
-
-</div>
-
-
-<!-- ===================================================== -->
-<!-- 結果 -->
-<!-- ===================================================== -->
-
-<div
-class="card"
-id="result"
->
-
-
-<h2>辨識結果</h2>
-
-
-<div class="summary">
-
-
-<div class="summary-box">
-
-<div class="summary-label">
-原圖總數
-</div>
-
-<div
-class="summary-value"
-id="oldTotal"
->
-0
-</div>
-
-</div>
-
-
-
-<div class="summary-box">
-
-<div class="summary-label">
-修改圖總數
-</div>
-
-<div
-class="summary-value"
-id="newTotal"
->
-0
-</div>
-
-</div>
-
-
-
-<div class="summary-box">
-
-<div class="summary-label">
-增加
-</div>
-
-<div
-class="summary-value"
-id="addedTotal"
->
-0
-</div>
-
-</div>
-
-
-
-<div class="summary-box">
-
-<div class="summary-label">
-減少
-</div>
-
-<div
-class="summary-value"
-id="removedTotal"
->
-0
-</div>
-
-</div>
-
-
-</div>
-
-
-
-<!-- 左右圖 -->
-
-<div class="images">
-
-
-<div class="image-box">
-
-<div class="image-title">
-原圖辨識結果
-</div>
-
-<img
-id="oldResult"
-alt="原圖"
->
-
-</div>
-
-
-
-<div class="image-box">
-
-<div class="image-title">
-修改圖辨識結果
-</div>
-
-<img
-id="newResult"
-alt="修改圖"
->
-
-</div>
-
-
-</div>
-
-
-
-<!-- 表格 -->
-
-<table>
-
-<thead>
-
-<tr>
-
-<th>設備類別</th>
-
-<th>原圖</th>
-
-<th>修改圖</th>
-
-<th>增加</th>
-
-<th>減少</th>
-
-<th>淨增減</th>
-
-</tr>
-
-</thead>
-
-
-<tbody
-id="resultRows"
->
-</tbody>
-
-
-</table>
-
-
-</div>
-
-</div>
-
-
-<script>
-
-
-const form =
-document.getElementById(
-    "uploadForm"
-);
-
-
-const statusEl =
-document.getElementById(
-    "status"
-);
-
-
-const analyzeButton =
-document.getElementById(
-    "analyzeButton"
-);
-
-
-
-form.addEventListener(
-
-    "submit",
-
-    async function(event){
-
-        event.preventDefault();
-
-
-        const oldFile =
-        document.getElementById(
-            "oldFile"
-        ).files[0];
-
-
-        const newFile =
-        document.getElementById(
-            "newFile"
-        ).files[0];
-
-
-        if(!oldFile || !newFile){
-
-            statusEl.textContent =
-            "請同時選擇原圖與修改圖";
-
-            statusEl.className =
-            "error";
-
-            return;
-        }
-
-
-        const formData =
-        new FormData(form);
-
-
-        analyzeButton.disabled =
-        true;
-
-
-        statusEl.textContent =
-        "正在辨識 13 種設備圖案...";
-
-
-        statusEl.className =
-        "";
-
-
-        try{
-
-
-            const response =
-            await fetch(
-
-                "/analyze",
-
-                {
-                    method:"POST",
-
-                    body:formData
-                }
-            );
-
-
-            const data =
-            await response.json();
-
-
-            if(!response.ok){
-
-                throw new Error(
-
-                    data.error
-                    ||
-                    "辨識失敗"
-                );
-            }
-
-
-            document.getElementById(
-                "result"
-            ).style.display =
-            "block";
-
-
-            document.getElementById(
-                "oldTotal"
-            ).textContent =
-            data.old_count;
-
-
-            document.getElementById(
-                "newTotal"
-            ).textContent =
-            data.new_count;
-
-
-            document.getElementById(
-                "addedTotal"
-            ).textContent =
-            data.added_count;
-
-
-            document.getElementById(
-                "removedTotal"
-            ).textContent =
-            data.removed_count;
-
-
-            document.getElementById(
-                "oldResult"
-            ).src =
-            data.old_image;
-
-
-            document.getElementById(
-                "newResult"
-            ).src =
-            data.new_image;
-
-
-
-            const rows =
-            document.getElementById(
-                "resultRows"
-            );
-
-
-            rows.innerHTML =
-            "";
-
-
-            data.rows.forEach(
-
-                function(row){
-
-
-                    const tr =
-                    document.createElement(
-                        "tr"
-                    );
-
-
-                    let diffText =
-                    row.difference;
-
-
-                    if(
-                        row.difference > 0
-                    ){
-
-                        diffText =
-                        "+" +
-                        row.difference;
-                    }
-
-
-                    tr.innerHTML = `
-
-<td>
-${row.name}
-</td>
-
-<td>
-${row.old_count}
-</td>
-
-<td>
-${row.new_count}
-</td>
-
-<td class="plus">
-${row.added_count}
-</td>
-
-<td class="minus">
-${row.removed_count}
-</td>
-
-<td>
-${diffText}
-</td>
-
-`;
-
-
-                    rows.appendChild(
-                        tr
-                    );
-
-
-                }
-
-            );
-
-
-            // ================================
-            // 合計
-            // ================================
-
-
-            const totalRow =
-            document.createElement(
-                "tr"
-            );
-
-
-            totalRow.className =
-            "total-row";
-
-
-            totalRow.innerHTML = `
-
-<td>
-合計
-</td>
-
-<td>
-${data.old_count}
-</td>
-
-<td>
-${data.new_count}
-</td>
-
-<td>
-${data.added_count}
-</td>
-
-<td>
-${data.removed_count}
-</td>
-
-<td>
-${data.difference > 0 ? "+" : ""}
-${data.difference}
-</td>
-
-`;
-
-
-            rows.appendChild(
-                totalRow
-            );
-
-
-            statusEl.textContent =
-            "辨識完成";
-
-
-            document.getElementById(
-                "result"
-            ).scrollIntoView({
-
-                behavior:"smooth"
-            });
-
-
-        }
-        catch(error){
-
-
-            statusEl.textContent =
-            error.message;
-
-
-            statusEl.className =
-            "error";
-
-
-        }
-        finally{
-
-
-            analyzeButton.disabled =
-            false;
-
-
-        }
-
-
-    }
-
-);
-
-
-</script>
 
 </body>
-
 </html>
 """
 
 
 # ============================================================
-# 副檔名
+# 檔案副檔名
 # ============================================================
 
-def allowed(filename):
+def allowed_file(filename):
 
-    if "." not in filename:
-
+    if not filename:
         return False
 
-    ext = (
-        filename
-        .rsplit(".", 1)[1]
-        .lower()
-    )
-
-    return ext in ALLOWED_EXTENSIONS
-
-
-
-# ============================================================
-# 讀取圖片 / PDF 指定頁
-# ============================================================
-
-def read_upload(
-    file,
-    page_number=1
-):
-
-    filename =
-    file.filename or ""
-
-
     if "." not in filename:
+        return False
 
+    extension = filename.rsplit(".", 1)[1].lower()
+
+    return extension in ALLOWED_EXTENSIONS
+
+
+# ============================================================
+# 讀取圖片 / PDF
+# ============================================================
+
+def load_image_from_upload(uploaded_file):
+
+    if uploaded_file is None:
         return None
 
+    filename = uploaded_file.filename
 
-    ext = (
-        filename
-        .rsplit(".", 1)[1]
-        .lower()
-    )
+    if not allowed_file(filename):
+        return None
 
-
-    raw =
-    file.read()
-
+    raw = uploaded_file.read()
 
     if not raw:
-
         return None
 
+    extension = filename.rsplit(".", 1)[1].lower()
 
-    # ========================================================
+
+    # --------------------------------------------------------
     # PDF
-    # ========================================================
+    # --------------------------------------------------------
 
-    if ext == "pdf":
+    if extension == "pdf":
 
-
-        doc = fitz.open(
-
-            stream=raw,
-
-            filetype="pdf"
-
-        )
-
+        document = None
 
         try:
 
-
-            page_index =
-            page_number - 1
-
-
-            if page_index < 0:
-
-                page_index = 0
-
-
-            if page_index >= len(doc):
-
-                raise ValueError(
-
-                    f"PDF 只有 "
-                    f"{len(doc)} 頁，"
-                    f"找不到第 "
-                    f"{page_number} 頁"
-
-                )
-
-
-            page =
-            doc.load_page(
-                page_index
+            document = fitz.open(
+                stream=raw,
+                filetype="pdf"
             )
 
+            if len(document) == 0:
+                return None
 
-            # 4 倍解析度
-            # 小型插座符號比較容易辨識
+            page = document.load_page(0)
 
-            pix =
-            page.get_pixmap(
-
-                matrix=fitz.Matrix(
-                    4.0,
-                    4.0
-                ),
-
+            pixmap = page.get_pixmap(
+                matrix=fitz.Matrix(2.5, 2.5),
                 alpha=False
-
             )
 
+            png_bytes = pixmap.tobytes("png")
 
-            png_bytes =
-            pix.tobytes(
-                "png"
+            array = np.frombuffer(
+                png_bytes,
+                np.uint8
             )
 
+            image = cv2.imdecode(
+                array,
+                cv2.IMREAD_COLOR
+            )
+
+            return image
 
         finally:
 
-
-            doc.close()
-
-
-        arr =
-        np.frombuffer(
-
-            png_bytes,
-
-            np.uint8
-
-        )
+            if document is not None:
+                document.close()
 
 
-        image =
-        cv2.imdecode(
+    # --------------------------------------------------------
+    # JPG / PNG
+    # --------------------------------------------------------
 
-            arr,
-
-            cv2.IMREAD_COLOR
-
-        )
-
-
-        return image
-
-
-    # ========================================================
-    # 一般圖片
-    # ========================================================
-
-
-    arr =
-    np.frombuffer(
-
+    array = np.frombuffer(
         raw,
-
         np.uint8
-
     )
 
-
-    image =
-    cv2.imdecode(
-
-        arr,
-
+    image = cv2.imdecode(
+        array,
         cv2.IMREAD_COLOR
-
     )
-
 
     return image
 
 
-
 # ============================================================
-# 去除白邊
+# 圖片轉 Base64
 # ============================================================
 
-def crop_white_border(image):
+def image_to_base64(image):
 
-    gray =
-    cv2.cvtColor(
-
-        image,
-
-        cv2.COLOR_BGR2GRAY
-
+    success, buffer = cv2.imencode(
+        ".png",
+        image
     )
 
+    if not success:
+        return ""
 
-    mask =
-    gray < 245
-
-
-    coords =
-    cv2.findNonZero(
-
-        mask.astype(
-            np.uint8
-        )
-    )
-
-
-    if coords is None:
-
-        return image
-
-
-    x, y, w, h =
-    cv2.boundingRect(
-        coords
-    )
-
-
-    # 保留一點邊界
-
-    padding = 10
-
-
-    x =
-    max(
-        0,
-        x - padding
-    )
-
-
-    y =
-    max(
-        0,
-        y - padding
-    )
-
-
-    x2 =
-    min(
-        image.shape[1],
-        x + w + padding * 2
-    )
-
-
-    y2 =
-    min(
-        image.shape[0],
-        y + h + padding * 2
-    )
-
-
-    return image[
-        y:y2,
-        x:x2
-    ]
-
+    return base64.b64encode(
+        buffer.tobytes()
+    ).decode("utf-8")
 
 
 # ============================================================
-# 圖面預處理
-# ============================================================
-
-def prepare_plan(image):
-
-    gray =
-    cv2.cvtColor(
-
-        image,
-
-        cv2.COLOR_BGR2GRAY
-
-    )
-
-
-    gray =
-    cv2.GaussianBlur(
-
-        gray,
-
-        (3, 3),
-
-        0
-
-    )
-
-
-    return gray
-
-
-
-# ============================================================
-# 讀取 13 個樣板
+# 讀取符號模板
 # ============================================================
 
 def load_symbol_templates():
 
-    templates = {}
+    templates = []
 
-    missing = []
-
-
-    for symbol_id in range(13):
+    if not SYMBOL_DIR.exists():
+        return templates
 
 
-        path =
-        SYMBOL_DIR / (
-            f"{symbol_id}.png"
-        )
+    for file_path in sorted(SYMBOL_DIR.iterdir()):
 
+        if not file_path.is_file():
+            continue
 
-        if not path.exists():
+        extension = file_path.suffix.lower()
 
-            missing.append(
-                str(path)
-            )
-
+        if extension not in {
+            ".png",
+            ".jpg",
+            ".jpeg"
+        }:
             continue
 
 
-        image =
-        cv2.imread(
-
-            str(path),
-
-            cv2.IMREAD_UNCHANGED
-
+        template = cv2.imread(
+            str(file_path),
+            cv2.IMREAD_GRAYSCALE
         )
 
-
-        if image is None:
-
-            missing.append(
-                str(path)
-            )
-
+        if template is None:
             continue
 
 
-        # PNG 有透明背景
-
-        if len(image.shape) == 3 and image.shape[2] == 4:
-
-
-            alpha =
-            image[:, :, 3]
+        if (
+            template.shape[0] < 5
+            or template.shape[1] < 5
+        ):
+            continue
 
 
-            bgr =
-            image[:, :, :3]
+        templates.append({
+
+            "name": file_path.stem,
+
+            "image": template
+
+        })
 
 
-            gray =
-            cv2.cvtColor(
-
-                bgr,
-
-                cv2.COLOR_BGR2GRAY
-
-            )
-
-
-            # 透明區域變白
-
-            gray[
-                alpha == 0
-            ] = 255
-
-
-        else:
-
-
-            if len(image.shape) == 3:
-
-
-                gray =
-                cv2.cvtColor(
-
-                    image,
-
-                    cv2.COLOR_BGR2GRAY
-
-                )
-
-
-            else:
-
-
-                gray =
-                image
-
-
-        # 二值化
-
-        gray =
-        cv2.GaussianBlur(
-
-            gray,
-
-            (3, 3),
-
-            0
-
-        )
-
-
-        templates[symbol_id] =
-        gray
-
-
-    return templates, missing
-
-
-
-# ============================================================
-# 旋轉樣板
-# ============================================================
-
-def rotate_image(
-    image,
-    angle
-):
-
-
-    if angle == 0:
-
-        return image
-
-
-    if angle == 90:
-
-        return cv2.rotate(
-
-            image,
-
-            cv2.ROTATE_90_CLOCKWISE
-
-        )
-
-
-    if angle == 180:
-
-        return cv2.rotate(
-
-            image,
-
-            cv2.ROTATE_180
-
-        )
-
-
-    return cv2.rotate(
-
-        image,
-
-        cv2.ROTATE_90_COUNTERCLOCKWISE
-
-    )
-
+    return templates
 
 
 # ============================================================
 # 計算 IoU
 # ============================================================
 
-def calculate_iou(
-    a,
-    b
-):
+def calculate_iou(box_a, box_b):
 
-    ax1 =
-    a["x"]
+    ax1 = box_a["x"]
+    ay1 = box_a["y"]
 
-    ay1 =
-    a["y"]
-
-    ax2 =
-    ax1 + a["w"]
-
-    ay2 =
-    ay1 + a["h"]
+    ax2 = ax1 + box_a["w"]
+    ay2 = ay1 + box_a["h"]
 
 
-    bx1 =
-    b["x"]
+    bx1 = box_b["x"]
+    by1 = box_b["y"]
 
-    by1 =
-    b["y"]
-
-    bx2 =
-    bx1 + b["w"]
-
-    by2 =
-    by1 + b["h"]
+    bx2 = bx1 + box_b["w"]
+    by2 = by1 + box_b["h"]
 
 
-    x1 =
-    max(ax1, bx1)
+    intersection_x1 = max(
+        ax1,
+        bx1
+    )
 
-    y1 =
-    max(ay1, by1)
+    intersection_y1 = max(
+        ay1,
+        by1
+    )
 
-    x2 =
-    min(ax2, bx2)
+    intersection_x2 = min(
+        ax2,
+        bx2
+    )
 
-    y2 =
-    min(ay2, by2)
-
-
-    inter_w =
-    max(
-        0,
-        x2 - x1
+    intersection_y2 = min(
+        ay2,
+        by2
     )
 
 
-    inter_h =
-    max(
+    intersection_width = max(
         0,
-        y2 - y1
+        intersection_x2 - intersection_x1
+    )
+
+    intersection_height = max(
+        0,
+        intersection_y2 - intersection_y1
     )
 
 
-    intersection =
-    inter_w * inter_h
+    intersection_area = (
+        intersection_width
+        *
+        intersection_height
+    )
 
 
-    area_a =
-    a["w"] * a["h"]
+    area_a = (
+        (ax2 - ax1)
+        *
+        (ay2 - ay1)
+    )
+
+    area_b = (
+        (bx2 - bx1)
+        *
+        (by2 - by1)
+    )
 
 
-    area_b =
-    b["w"] * b["h"]
+    union_area = (
+        area_a
+        +
+        area_b
+        -
+        intersection_area
+    )
 
 
-    union =
-    area_a + area_b - intersection
+    if union_area <= 0:
+        return 0.0
 
 
-    if union <= 0:
-
-        return 0
-
-
-    return intersection / union
-
+    return (
+        intersection_area
+        /
+        union_area
+    )
 
 
 # ============================================================
-# 同一種類去重
+# 同一符號內去除重複
 # ============================================================
 
-def remove_duplicates(matches):
+def remove_duplicate_matches(matches):
 
-
-    matches =
-    sorted(
-
+    matches = sorted(
         matches,
-
-        key=lambda item:
-        item["score"],
-
+        key=lambda item: item["score"],
         reverse=True
-
     )
 
 
@@ -1565,25 +697,85 @@ def remove_duplicates(matches):
 
     for candidate in matches:
 
-
         duplicate = False
 
 
         for existing in kept:
 
-
-            overlap =
-            calculate_iou(
-
+            overlap = calculate_iou(
                 candidate,
-
                 existing
+            )
+
+
+            candidate_cx = (
+                candidate["x"]
+                +
+                candidate["w"] / 2
+            )
+
+            candidate_cy = (
+                candidate["y"]
+                +
+                candidate["h"] / 2
+            )
+
+
+            existing_cx = (
+                existing["x"]
+                +
+                existing["w"] / 2
+            )
+
+            existing_cy = (
+                existing["y"]
+                +
+                existing["h"] / 2
+            )
+
+
+            distance = (
+
+                (
+                    candidate_cx
+                    -
+                    existing_cx
+                ) ** 2
+
+                +
+
+                (
+                    candidate_cy
+                    -
+                    existing_cy
+                ) ** 2
+
+            ) ** 0.5
+
+
+            min_size = min(
+
+                max(
+                    candidate["w"],
+                    candidate["h"]
+                ),
+
+                max(
+                    existing["w"],
+                    existing["h"]
+                )
 
             )
 
 
-            if overlap >= 0.30:
-
+            if (
+                overlap >= 0.30
+                or
+                distance <= max(
+                    5,
+                    min_size * 0.30
+                )
+            ):
 
                 duplicate = True
 
@@ -1600,49 +792,31 @@ def remove_duplicates(matches):
     return kept
 
 
-
 # ============================================================
-# 不同類別重複辨識
-#
-# 保留相似度最高的結果
+# 不同符號之間去除重複
 # ============================================================
 
-def remove_cross_class_duplicates(
-    detections
-):
-
+def remove_cross_class_duplicates(detections):
 
     all_items = []
 
 
-    for symbol_id, matches in detections.items():
-
+    for symbol_name, matches in detections.items():
 
         for item in matches:
 
+            current = dict(item)
 
-            current =
-            dict(item)
-
-
-            current["symbol_id"] =
-            symbol_id
-
+            current["symbol_name"] = symbol_name
 
             all_items.append(
                 current
             )
 
 
-    # 相似度高的優先保留
-
     all_items.sort(
-
-        key=lambda item:
-        item["score"],
-
+        key=lambda item: item["score"],
         reverse=True
-
     )
 
 
@@ -1651,118 +825,85 @@ def remove_cross_class_duplicates(
 
     for candidate in all_items:
 
-
         duplicate = False
 
 
-        cx = (
-
+        candidate_cx = (
             candidate["x"]
-
-            + candidate["w"] / 2
-
+            +
+            candidate["w"] / 2
         )
 
-
-        cy = (
-
+        candidate_cy = (
             candidate["y"]
-
-            + candidate["h"] / 2
-
+            +
+            candidate["h"] / 2
         )
 
 
         for existing in kept:
 
-
-            ex = (
-
+            existing_cx = (
                 existing["x"]
-
-                + existing["w"] / 2
-
+                +
+                existing["w"] / 2
             )
 
-
-            ey = (
-
+            existing_cy = (
                 existing["y"]
-
-                + existing["h"] / 2
-
+                +
+                existing["h"] / 2
             )
 
-
-            # 中心距離
 
             distance = (
 
-                (cx - ex) ** 2
+                (
+                    candidate_cx
+                    -
+                    existing_cx
+                ) ** 2
 
                 +
 
-                (cy - ey) ** 2
+                (
+                    candidate_cy
+                    -
+                    existing_cy
+                ) ** 2
 
             ) ** 0.5
 
 
-            candidate_size = max(
-
-                candidate["w"],
-
-                candidate["h"]
-
-            )
-
-
-            existing_size = max(
-
-                existing["w"],
-
-                existing["h"]
-
+            overlap = calculate_iou(
+                candidate,
+                existing
             )
 
 
             min_size = min(
 
-                candidate_size,
-
-                existing_size
-
-            )
-
-
-            overlap =
-            calculate_iou(
-
-                candidate,
-
-                existing
-
-            )
-
-
-            # 必須同時：
-            #
-            # 1. 框有一定重疊
-            # 2. 中心位置非常接近
-
-            if (
-
-                overlap >= 0.35
-
-                and
-
-                distance <=
                 max(
-                    3,
-                    min_size * 0.25
+                    candidate["w"],
+                    candidate["h"]
+                ),
+
+                max(
+                    existing["w"],
+                    existing["h"]
                 )
 
-            ):
+            )
 
+
+            if (
+                overlap >= 0.50
+                and
+                distance <= max(
+                    5,
+                    min_size * 0.40
+                )
+            ):
 
                 duplicate = True
 
@@ -1778,34 +919,25 @@ def remove_cross_class_duplicates(
 
     cleaned = {
 
-        symbol_id: []
+        symbol_name: []
 
-        for symbol_id in detections
+        for symbol_name
+        in detections
 
     }
 
 
     for item in kept:
 
-
         cleaned[
-            item["symbol_id"]
+            item["symbol_name"]
         ].append({
 
-            "x":
-            item["x"],
-
-            "y":
-            item["y"],
-
-            "w":
-            item["w"],
-
-            "h":
-            item["h"],
-
-            "score":
-            item["score"]
+            "x": item["x"],
+            "y": item["y"],
+            "w": item["w"],
+            "h": item["h"],
+            "score": item["score"]
 
         })
 
@@ -1813,478 +945,172 @@ def remove_cross_class_duplicates(
     return cleaned
 
 
-
 # ============================================================
-# 偵測 13 種圖案
+# 進行符號辨識
 # ============================================================
 
-def detect_symbols(
-    image,
-    templates
-):
+def detect_symbols(image):
+
+    if image is None:
+        return {}
 
 
-    gray =
-    prepare_plan(
-        image
+    gray = cv2.cvtColor(
+        image,
+        cv2.COLOR_BGR2GRAY
     )
 
 
-    original_h, original_w =
-    gray.shape
+    templates = load_symbol_templates()
 
 
-    # ========================================================
-    # 大圖縮小
-    # ========================================================
-
-    ratio =
-    min(
-
-        1.0,
-
-        1600 /
-        max(
-            original_h,
-            original_w
-        )
-
-    )
+    detections = {}
 
 
-    if ratio < 1.0:
+    for template_data in templates:
+
+        symbol_name = template_data["name"]
+
+        template = template_data["image"]
 
 
-        search_w =
-        max(
+        template_height = template.shape[0]
 
-            1,
-
-            int(
-                original_w * ratio
-            )
-
-        )
+        template_width = template.shape[1]
 
 
-        search_h =
-        max(
+        if (
+            template_height > gray.shape[0]
+            or
+            template_width > gray.shape[1]
+        ):
 
-            1,
-
-            int(
-                original_h * ratio
-            )
-
-        )
+            continue
 
 
-        gray =
-        cv2.resize(
+        result = cv2.matchTemplate(
 
             gray,
 
-            (
-                search_w,
-                search_h
-            ),
+            template,
 
-            interpolation=
-            cv2.INTER_AREA
+            cv2.TM_CCOEFF_NORMED
 
         )
 
 
-    scale_x = (
-        original_w /
-        gray.shape[1]
+        # ----------------------------------------------------
+        # 辨識門檻
+        # ----------------------------------------------------
+
+        threshold = 0.62
+
+
+        locations = np.where(
+            result >= threshold
+        )
+
+
+        matches = []
+
+
+        for y, x in zip(
+            locations[0],
+            locations[1]
+        ):
+
+            score = float(
+                result[y, x]
+            )
+
+
+            matches.append({
+
+                "x": int(x),
+
+                "y": int(y),
+
+                "w": int(template_width),
+
+                "h": int(template_height),
+
+                "score": score
+
+            })
+
+
+        matches = remove_duplicate_matches(
+            matches
+        )
+
+
+        detections[symbol_name] = matches
+
+
+    detections = remove_cross_class_duplicates(
+        detections
     )
-
-
-    scale_y = (
-        original_h /
-        gray.shape[0]
-    )
-
-
-    # ========================================================
-    # 各品項門檻
-    # ========================================================
-
-    thresholds = {
-
-        0: 0.72,
-
-        1: 0.53,
-
-        2: 0.50,
-
-        3: 0.65,
-
-        4: 0.58,
-
-        5: 0.58,
-
-        6: 0.75,
-
-        7: 0.60,
-
-        8: 0.54,
-
-        9: 0.76,
-
-        10: 0.73,
-
-        11: 0.73,
-
-        12: 0.60
-
-    }
-
-
-    # ========================================================
-    # 最小縮放
-    # ========================================================
-
-    min_scales = {
-
-        0: 0.40,
-
-        1: 0.35,
-
-        2: 0.35,
-
-        3: 0.40,
-
-        4: 0.40,
-
-        5: 0.40,
-
-        6: 0.45,
-
-        7: 0.40,
-
-        8: 0.40,
-
-        9: 0.50,
-
-        10: 0.50,
-
-        11: 0.50,
-
-        12: 0.55
-
-    }
-
-
-    # ========================================================
-    # 縮放比例
-    #
-    # 保留較多尺寸，
-    # 避免圖面大小不同找不到符號
-    # ========================================================
-
-    scale_values = [
-
-        0.40,
-        0.50,
-        0.60,
-        0.70,
-        0.80,
-        0.90,
-        1.00,
-        1.15,
-        1.30,
-        1.50,
-        1.70,
-        2.00
-
-    ]
-
-
-    # ========================================================
-    # 旋轉角度
-    # ========================================================
-
-    angles = [
-
-        0,
-        90,
-        180,
-        270
-
-    ]
-
-
-    detections = {
-
-        symbol_id: []
-
-        for symbol_id in templates
-
-    }
-
-
-    # ========================================================
-    # 每一個符號
-    # ========================================================
-
-    for symbol_id, template in templates.items():
-
-
-        threshold =
-        thresholds.get(
-            symbol_id,
-            0.60
-        )
-
-
-        min_scale =
-        min_scales.get(
-            symbol_id,
-            0.40
-        )
-
-
-        # ====================================================
-        # 多尺寸
-        # ====================================================
-
-        for scale in scale_values:
-
-
-            if scale < min_scale:
-
-                continue
-
-
-            scaled_w =
-            max(
-                1,
-                int(
-                    template.shape[1]
-                    * scale
-                )
-            )
-
-
-            scaled_h =
-            max(
-                1,
-                int(
-                    template.shape[0]
-                    * scale
-                )
-            )
-
-
-            if (
-
-                scaled_w >= gray.shape[1]
-
-                or
-
-                scaled_h >= gray.shape[0]
-
-            ):
-
-                continue
-
-
-            scaled =
-            cv2.resize(
-
-                template,
-
-                (
-                    scaled_w,
-                    scaled_h
-                ),
-
-                interpolation=
-                cv2.INTER_CUBIC
-
-            )
-
-
-            # =================================================
-            # 多方向
-            # =================================================
-
-            for angle in angles:
-
-
-                rotated =
-                rotate_image(
-
-                    scaled,
-
-                    angle
-
-                )
-
-
-                rh, rw =
-                rotated.shape
-
-
-                if (
-
-                    rw >= gray.shape[1]
-
-                    or
-
-                    rh >= gray.shape[0]
-
-                ):
-
-                    continue
-
-
-                result =
-                cv2.matchTemplate(
-
-                    gray,
-
-                    rotated,
-
-                    cv2.TM_CCOEFF_NORMED
-
-                )
-
-
-                locations =
-                np.where(
-
-                    result >= threshold
-
-                )
-
-
-                for y, x in zip(
-
-                    locations[0],
-
-                    locations[1]
-
-                ):
-
-
-                    score =
-                    float(
-                        result[y, x]
-                    )
-
-
-                    detections[
-                        symbol_id
-                    ].append({
-
-                        "x":
-                        int(
-                            x * scale_x
-                        ),
-
-                        "y":
-                        int(
-                            y * scale_y
-                        ),
-
-                        "w":
-                        int(
-                            rw * scale_x
-                        ),
-
-                        "h":
-                        int(
-                            rh * scale_y
-                        ),
-
-                        "score":
-                        score
-
-                    })
-
-
-        # ====================================================
-        # 同類別去重
-        # ====================================================
-
-        detections[
-            symbol_id
-        ] = remove_duplicates(
-
-            detections[
-                symbol_id
-            ]
-
-        )
 
 
     return detections
 
 
+# ============================================================
+# 計算全部辨識數量
+# ============================================================
+
+def count_detections(detections):
+
+    total = 0
+
+
+    for matches in detections.values():
+
+        total += len(matches)
+
+
+    return total
+
 
 # ============================================================
-# 在圖面上畫紅圈與類別編號
+# 圖面畫紅圈
 # ============================================================
 
-def draw_detected_symbols(
-    image,
-    detections
-):
+def draw_detected_symbols(image, detections):
+
+    result = image.copy()
 
 
-    result =
-    image.copy()
+    number = 1
 
 
-    for symbol_id, matches in detections.items():
-
+    for symbol_name, matches in detections.items():
 
         for match in matches:
 
+            x = match["x"]
+            y = match["y"]
 
-            x =
-            match["x"]
-
-
-            y =
-            match["y"]
+            w = match["w"]
+            h = match["h"]
 
 
-            w =
-            match["w"]
+            center_x = x + w // 2
+            center_y = y + h // 2
 
 
-            h =
-            match["h"]
-
-
-            center_x =
-            x + w // 2
-
-
-            center_y =
-            y + h // 2
-
-
-            radius =
-            max(
+            radius = max(
 
                 10,
 
                 int(
                     max(w, h)
-                    * 0.60
+                    *
+                    0.60
                 )
 
             )
 
-
-            # ================================================
-            # 紅圈
-            # ================================================
 
             cv2.circle(
 
@@ -2308,33 +1134,14 @@ def draw_detected_symbols(
             )
 
 
-            # ================================================
-            # 編號
-            # ================================================
-
-            label =
-            str(
-                symbol_id
-            )
-
-
-            label_x =
-            max(
-
+            label_x = max(
                 12,
-
                 center_x - radius
-
             )
 
-
-            label_y =
-            max(
-
+            label_y = max(
                 12,
-
                 center_y - radius
-
             )
 
 
@@ -2347,7 +1154,7 @@ def draw_detected_symbols(
                     label_y
                 ),
 
-                12,
+                11,
 
                 (
                     0,
@@ -2360,37 +1167,32 @@ def draw_detected_symbols(
             )
 
 
-            text_size, _ =
-            cv2.getTextSize(
+            label = str(number)
+
+
+            text_size, _ = cv2.getTextSize(
 
                 label,
 
                 cv2.FONT_HERSHEY_SIMPLEX,
 
-                0.42,
+                0.40,
 
                 1
 
             )
 
 
-            text_x =
-            int(
-
+            text_x = int(
                 label_x
                 -
                 text_size[0] / 2
-
             )
 
-
-            text_y =
-            int(
-
+            text_y = int(
                 label_y
                 +
                 text_size[1] / 2
-
             )
 
 
@@ -2407,7 +1209,7 @@ def draw_detected_symbols(
 
                 cv2.FONT_HERSHEY_SIMPLEX,
 
-                0.42,
+                0.40,
 
                 (
                     255,
@@ -2422,607 +1224,258 @@ def draw_detected_symbols(
             )
 
 
+            number += 1
+
+
     return result
-
-
-
-# ============================================================
-# 圖片轉 Base64
-# ============================================================
-
-def image_to_base64(image):
-
-
-    h, w =
-    image.shape[:2]
-
-
-    max_side = 2200
-
-
-    ratio =
-    min(
-
-        1.0,
-
-        max_side /
-        max(
-            h,
-            w
-        )
-
-    )
-
-
-    if ratio < 1.0:
-
-
-        image =
-        cv2.resize(
-
-            image,
-
-            (
-                int(w * ratio),
-                int(h * ratio)
-            ),
-
-            interpolation=
-            cv2.INTER_AREA
-
-        )
-
-
-    success, buffer =
-    cv2.imencode(
-
-        ".jpg",
-
-        image,
-
-        [
-
-            int(
-                cv2.IMWRITE_JPEG_QUALITY
-            ),
-
-            90
-
-        ]
-
-    )
-
-
-    if not success:
-
-        raise RuntimeError(
-            "圖片編碼失敗"
-        )
-
-
-    encoded =
-    base64.b64encode(
-
-        buffer.tobytes()
-
-    ).decode(
-        "utf-8"
-    )
-
-
-    return (
-        "data:image/jpeg;base64,"
-        +
-        encoded
-    )
-
 
 
 # ============================================================
 # 首頁
 # ============================================================
 
-@app.route("/")
+@app.route(
+    "/",
+    methods=["GET"]
+)
 def index():
 
     return render_template_string(
-        INDEX_HTML
+        PAGE_HTML,
+        result=None,
+        error=None
     )
 
 
-
 # ============================================================
-# 分析 API
+# 分析圖面
 # ============================================================
 
 @app.route(
     "/analyze",
     methods=["POST"]
 )
-def analyze_api():
+def analyze():
 
+    original_file = request.files.get(
+        "original_file"
+    )
 
-    old_file =
-    request.files.get(
-        "old"
+    modified_file = request.files.get(
+        "modified_file"
     )
 
 
-    new_file =
-    request.files.get(
-        "new"
-    )
+    if original_file is None:
 
+        return render_template_string(
 
-    if not old_file or not new_file:
+            PAGE_HTML,
 
+            result=None,
 
-        return jsonify(
+            error="請上傳原始圖。"
 
-            error=
-            "請同時上傳原始圖與修改後圖"
-
-        ), 400
-
-
-
-    if (
-
-        not allowed(
-            old_file.filename
         )
 
-        or
 
-        not allowed(
-            new_file.filename
+    if modified_file is None:
+
+        return render_template_string(
+
+            PAGE_HTML,
+
+            result=None,
+
+            error="請上傳修改後圖。"
+
         )
 
+
+    if not allowed_file(
+        original_file.filename
     ):
 
+        return render_template_string(
 
-        return jsonify(
+            PAGE_HTML,
 
-            error=
-            "不支援此檔案格式"
+            result=None,
 
-        ), 400
+            error="原始圖格式不支援。"
 
+        )
+
+
+    if not allowed_file(
+        modified_file.filename
+    ):
+
+        return render_template_string(
+
+            PAGE_HTML,
+
+            result=None,
+
+            error="修改後圖格式不支援。"
+
+        )
+
+
+    original_image = load_image_from_upload(
+        original_file
+    )
+
+    modified_image = load_image_from_upload(
+        modified_file
+    )
+
+
+    if original_image is None:
+
+        return render_template_string(
+
+            PAGE_HTML,
+
+            result=None,
+
+            error="無法讀取原始圖。"
+
+        )
+
+
+    if modified_image is None:
+
+        return render_template_string(
+
+            PAGE_HTML,
+
+            result=None,
+
+            error="無法讀取修改後圖。"
+
+        )
 
 
     # ========================================================
-    # 頁碼
+    # 原圖單獨辨識
     # ========================================================
 
-    try:
+    original_detections = detect_symbols(
+        original_image
+    )
 
 
-        old_page =
-        int(
+    # ========================================================
+    # 修改圖單獨辨識
+    # ========================================================
 
-            request.form.get(
+    modified_detections = detect_symbols(
+        modified_image
+    )
 
-                "old_page",
 
-                1
+    # ========================================================
+    # 各自計算數量
+    # ========================================================
 
-            )
+    original_total = count_detections(
+        original_detections
+    )
 
+    modified_total = count_detections(
+        modified_detections
+    )
+
+
+    added = max(
+        0,
+        modified_total - original_total
+    )
+
+
+    removed = max(
+        0,
+        original_total - modified_total
+    )
+
+
+    net_change = (
+        modified_total
+        -
+        original_total
+    )
+
+
+    # ========================================================
+    # 畫辨識結果
+    # ========================================================
+
+    original_marked = draw_detected_symbols(
+
+        original_image,
+
+        original_detections
+
+    )
+
+
+    modified_marked = draw_detected_symbols(
+
+        modified_image,
+
+        modified_detections
+
+    )
+
+
+    result = {
+
+        "original_total": original_total,
+
+        "modified_total": modified_total,
+
+        "added": added,
+
+        "removed": removed,
+
+        "net_change": (
+            f"{net_change:+d}"
+        ),
+
+        "original_image": image_to_base64(
+            original_marked
+        ),
+
+        "modified_image": image_to_base64(
+            modified_marked
         )
 
+    }
 
-        new_page =
-        int(
 
-            request.form.get(
+    return render_template_string(
 
-                "new_page",
+        PAGE_HTML,
 
-                1
+        result=result,
 
-            )
+        error=None
 
-        )
-
-
-        if old_page < 1:
-
-            old_page = 1
-
-
-        if new_page < 1:
-
-            new_page = 1
-
-
-    except Exception:
-
-
-        return jsonify(
-
-            error=
-            "PDF 頁碼格式錯誤"
-
-        ), 400
-
-
-
-    try:
-
-
-        # ====================================================
-        # 讀取圖面
-        # ====================================================
-
-        old_image =
-        read_upload(
-
-            old_file,
-
-            old_page
-
-        )
-
-
-        new_image =
-        read_upload(
-
-            new_file,
-
-            new_page
-
-        )
-
-
-        if (
-
-            old_image is None
-
-            or
-
-            new_image is None
-
-        ):
-
-
-            raise ValueError(
-                "圖片無法讀取"
-            )
-
-
-
-        # ====================================================
-        # 裁白邊
-        # ====================================================
-
-        old_image =
-        crop_white_border(
-            old_image
-        )
-
-
-        new_image =
-        crop_white_border(
-            new_image
-        )
-
-
-
-        # ====================================================
-        # 載入 13 種樣板
-        # ====================================================
-
-        templates, missing =
-        load_symbol_templates()
-
-
-        if missing:
-
-
-            raise ValueError(
-
-                "找不到圖案樣板："
-
-                +
-
-                "、".join(
-                    missing
-                )
-
-            )
-
-
-
-        # ====================================================
-        # 原圖辨識
-        # ====================================================
-
-        old_detections =
-        detect_symbols(
-
-            old_image,
-
-            templates
-
-        )
-
-
-
-        # ====================================================
-        # 修改圖辨識
-        # ====================================================
-
-        new_detections =
-        detect_symbols(
-
-            new_image,
-
-            templates
-
-        )
-
-
-
-        # ====================================================
-        # 跨類別去重
-        # ====================================================
-
-        old_detections =
-        remove_cross_class_duplicates(
-
-            old_detections
-
-        )
-
-
-        new_detections =
-        remove_cross_class_duplicates(
-
-            new_detections
-
-        )
-
-
-
-        # ====================================================
-        # 統計 13 種
-        # ====================================================
-
-        rows = []
-
-
-        old_total = 0
-
-        new_total = 0
-
-        added_total = 0
-
-        removed_total = 0
-
-
-
-        for symbol_id in range(13):
-
-
-            old_count =
-            len(
-
-                old_detections.get(
-
-                    symbol_id,
-
-                    []
-
-                )
-
-            )
-
-
-            new_count =
-            len(
-
-                new_detections.get(
-
-                    symbol_id,
-
-                    []
-
-                )
-
-            )
-
-
-            difference =
-            new_count - old_count
-
-
-            added_count =
-            max(
-
-                difference,
-
-                0
-
-            )
-
-
-            removed_count =
-            max(
-
-                -difference,
-
-                0
-
-            )
-
-
-
-            old_total += (
-                old_count
-            )
-
-
-            new_total += (
-                new_count
-            )
-
-
-            added_total += (
-                added_count
-            )
-
-
-            removed_total += (
-                removed_count
-            )
-
-
-
-            rows.append({
-
-                "id":
-                symbol_id,
-
-                "name":
-                SYMBOL_NAMES.get(
-
-                    symbol_id,
-
-                    f"設備 {symbol_id}"
-
-                ),
-
-                "old_count":
-                old_count,
-
-                "new_count":
-                new_count,
-
-                "added_count":
-                added_count,
-
-                "removed_count":
-                removed_count,
-
-                "difference":
-                difference
-
-            })
-
-
-
-        # ====================================================
-        # 畫辨識結果
-        # ====================================================
-
-        old_marked =
-        draw_detected_symbols(
-
-            old_image,
-
-            old_detections
-
-        )
-
-
-        new_marked =
-        draw_detected_symbols(
-
-            new_image,
-
-            new_detections
-
-        )
-
-
-
-        # ====================================================
-        # 回傳
-        # ====================================================
-
-        return jsonify(
-
-
-            old_count=
-            old_total,
-
-
-            new_count=
-            new_total,
-
-
-            difference=
-            new_total
-            -
-            old_total,
-
-
-            added_count=
-            added_total,
-
-
-            removed_count=
-            removed_total,
-
-
-            old_image=
-            image_to_base64(
-
-                old_marked
-
-            ),
-
-
-            new_image=
-            image_to_base64(
-
-                new_marked
-
-            ),
-
-
-            rows=
-            rows
-
-        )
-
-
-
-    except Exception as error:
-
-
-        app.logger.exception(
-            "分析失敗"
-        )
-
-
-        return jsonify(
-
-            error=
-            str(error)
-
-        ), 500
-
+    )
 
 
 # ============================================================
-# 啟動
+# Render 啟動
 # ============================================================
 
 if __name__ == "__main__":
 
-
-    port =
-    int(
-
+    port = int(
         os.environ.get(
-
             "PORT",
-
             10000
-
         )
-
     )
 
 
@@ -3032,6 +1485,6 @@ if __name__ == "__main__":
 
         port=port,
 
-        debug=True
+        debug=False
 
     )
