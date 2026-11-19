@@ -93,4 +93,14 @@ GLYPH_GROUPS = {
     "E": (11,),
 }
 SYMBOL_GLYPH_GROUP = {
-    symbol_id: glyph_group
+    2: "F",
+    4: "H",
+    5: "G",
+    6: "K",
+    7: "W",
+    8: "J",
+    9: "H",
+    10: "C",
+    11: "E",
+    12: "H",
+}
